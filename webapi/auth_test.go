@@ -36,3 +36,21 @@ func TestSignedCookieRejectsTampering(t *testing.T) {
 		t.Fatal("expected tampered cookie to be rejected")
 	}
 }
+
+func TestHandlerRoutesDoNotDependOnMethodQualifiedMuxPatterns(t *testing.T) {
+	api := &API{config: AppConfig{InternalAPISecret: "internal-secret", SigningSecret: "01234567890123456789012345678901"}, limits: newRateLimiter()}
+
+	health := httptest.NewRecorder()
+	api.Handler().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health route returned %d", health.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sessions", nil)
+	request.Header.Set("X-Internal-API-Secret", "internal-secret")
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected matched admin route to reject missing login with 401, got %d", response.Code)
+	}
+}

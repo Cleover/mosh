@@ -42,19 +42,37 @@ func New(config AppConfig) (*API, error) {
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", requireMethod(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"status": "ok"})
+	}))
+	mux.HandleFunc("/api/auth/admin/login", requireMethod(http.MethodPost, a.handleAdminLogin))
+	mux.HandleFunc("/api/auth/admin/logout", requireMethod(http.MethodPost, a.handleAdminLogout))
+	mux.HandleFunc("/api/admin/library/artists", requireMethod(http.MethodGet, a.handleArtists))
+	mux.HandleFunc("/api/admin/library/albums", requireMethod(http.MethodGet, a.handleAlbums))
+	mux.HandleFunc("/api/admin/library/tracks", requireMethod(http.MethodGet, a.handleTracks))
+	mux.HandleFunc("/api/admin/sessions", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			a.handleCreateSession(w, r)
+		case http.MethodGet:
+			a.handleListSessions(w, r)
+		default:
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 	})
-	mux.HandleFunc("POST /api/auth/admin/login", a.handleAdminLogin)
-	mux.HandleFunc("POST /api/auth/admin/logout", a.handleAdminLogout)
-	mux.HandleFunc("GET /api/admin/library/artists", a.handleArtists)
-	mux.HandleFunc("GET /api/admin/library/albums", a.handleAlbums)
-	mux.HandleFunc("GET /api/admin/library/tracks", a.handleTracks)
-	mux.HandleFunc("POST /api/admin/sessions", a.handleCreateSession)
-	mux.HandleFunc("GET /api/admin/sessions", a.handleListSessions)
-	mux.HandleFunc("GET /api/sessions/", a.handleSessionRoutes)
-	mux.HandleFunc("GET /api/art", a.handleArtwork)
+	mux.HandleFunc("/api/sessions/", a.handleSessionRoutes)
+	mux.HandleFunc("/api/art", requireMethod(http.MethodGet, a.handleArtwork))
 	return a.internalOnly(mux)
+}
+
+func requireMethod(expected string, handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != expected {
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handler(w, r)
+	}
 }
 
 func (a *API) internalOnly(next http.Handler) http.Handler {
