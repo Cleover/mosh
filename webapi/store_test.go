@@ -44,6 +44,18 @@ func TestAdminSessionViewFlattensPublicFieldsOnly(t *testing.T) {
 	}
 }
 
+func TestSessionViewOrdersMembersStably(t *testing.T) {
+	api := &API{}
+	view := api.view(&Session{Members: map[string]Member{
+		"z":    {ID: "z", Username: "Zelda"},
+		"host": {ID: "host", Username: "Host", Host: true},
+		"a":    {ID: "a", Username: "alice"},
+	}})
+	if len(view.Members) != 3 || view.Members[0].Username != "Host" || view.Members[1].Username != "alice" || view.Members[2].Username != "Zelda" {
+		t.Fatalf("members were not sorted predictably: %#v", view.Members)
+	}
+}
+
 func TestSessionPositionAdvancesOnlyWhilePlaying(t *testing.T) {
 	now := time.Now()
 	session := Session{IsPlaying: true, PositionMS: 1000, PositionAt: now.Add(-1500 * time.Millisecond)}

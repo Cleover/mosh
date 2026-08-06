@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -756,6 +757,12 @@ func (a *API) view(session *Session) sessionView {
 	for _, member := range session.Members {
 		view.Members = append(view.Members, member)
 	}
+	sort.Slice(view.Members, func(i, j int) bool {
+		if view.Members[i].Host != view.Members[j].Host {
+			return view.Members[i].Host
+		}
+		return strings.ToLower(view.Members[i].Username) < strings.ToLower(view.Members[j].Username)
+	})
 	return view
 }
 
