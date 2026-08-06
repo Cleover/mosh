@@ -29,6 +29,8 @@ type API struct {
 	http    *http.Client
 }
 
+const memberIdleTimeout = 45 * time.Second
+
 func New(config AppConfig) (*API, error) {
 	plexConfig := moshconfig.GetConfig()
 	if plexConfig.Token == moshconfig.UNINITIALIZED || plexConfig.Address == moshconfig.UNINITIALIZED || plexConfig.Library == moshconfig.UNINITIALIZED {
@@ -184,7 +186,7 @@ func (a *API) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if input.Password != "" {
 		session.PasswordHash = hashPassword(input.Password)
 	}
-	host := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Host: true, Permissions: Permissions{CanControl: true, CanQueue: true}}
+	host := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Host: true, Permissions: Permissions{CanControl: true, CanQueue: true}, LastSeen: now}
 	session.Members[host.ID] = host
 	a.store.mu.Lock()
 	a.store.sessions[session.ID] = session
@@ -298,6 +300,18 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		a.addQueue(w, r, session, member)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "queue" && parts[2] == "reorder" && r.Method == http.MethodPost {
+		a.reorderQueue(w, r, session, member)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "queue" && parts[2] == "remove" && r.Method == http.MethodPost {
+		a.removeFromQueue(w, r, session, member)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "leave" && r.Method == http.MethodPost {
+		a.leave(w, r, session, member)
+		return
+	}
 	if len(parts) == 3 && parts[1] == "control" && r.Method == http.MethodPost {
 		a.control(w, r, session, member, parts[2])
 		return
@@ -344,6 +358,7 @@ func (a *API) join(w http.ResponseWriter, r *http.Request, sessionID string) {
 		respondError(w, http.StatusUnauthorized, "incorrect session password")
 		return
 	}
+	pruneInactiveMembers(session, time.Now())
 	for _, existing := range session.Members {
 		if strings.EqualFold(existing.Username, strings.TrimSpace(input.Username)) {
 			a.store.mu.Unlock()
@@ -351,7 +366,7 @@ func (a *API) join(w http.ResponseWriter, r *http.Request, sessionID string) {
 			return
 		}
 	}
-	member := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Permissions: Permissions{}}
+	member := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Permissions: Permissions{}, LastSeen: time.Now()}
 	session.Members[member.ID] = member
 	err := a.store.saveLocked()
 	a.store.mu.Unlock()
@@ -369,15 +384,19 @@ func (a *API) member(r *http.Request, sessionID string) (Member, *Session, bool)
 	if !ok || claims.Role != "member" || claims.SessionID != sessionID {
 		return Member{}, nil, false
 	}
-	a.store.mu.RLock()
+	a.store.mu.Lock()
 	session := a.store.sessions[sessionID]
 	if session == nil {
-		a.store.mu.RUnlock()
+		a.store.mu.Unlock()
 		return Member{}, nil, false
 	}
 	member, exists := session.Members[claims.MemberID]
+	if exists {
+		member.LastSeen = time.Now()
+		session.Members[claims.MemberID] = member
+	}
 	copy := cloneSession(session)
-	a.store.mu.RUnlock()
+	a.store.mu.Unlock()
 	return member, copy, exists
 }
 
@@ -447,6 +466,112 @@ func (a *API) addQueue(w http.ResponseWriter, r *http.Request, session *Session,
 	}
 	view, _ := a.store.snapshot(current.ID)
 	respond(w, http.StatusOK, map[string]any{"session": a.view(view)})
+}
+
+// reorderQueue accepts positions in the full queue. The current track and
+// playback history are deliberately immutable; only upcoming tracks can move.
+func (a *API) reorderQueue(w http.ResponseWriter, r *http.Request, session *Session, member Member) {
+	if !member.Host && !member.Permissions.CanQueue {
+		respondError(w, http.StatusForbidden, "queue permission required")
+		return
+	}
+	var input struct {
+		FromIndex int `json:"fromIndex"`
+		ToIndex   int `json:"toIndex"`
+	}
+	if !decode(r, &input) {
+		respondError(w, http.StatusBadRequest, "fromIndex and toIndex are required")
+		return
+	}
+	a.store.mu.Lock()
+	current := a.store.sessions[session.ID]
+	if current == nil {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if input.FromIndex <= current.CurrentIndex || input.FromIndex >= len(current.Queue) || input.ToIndex <= current.CurrentIndex || input.ToIndex > len(current.Queue) {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusBadRequest, "only upcoming tracks can be reordered")
+		return
+	}
+	if input.FromIndex != input.ToIndex && input.FromIndex+1 != input.ToIndex {
+		queue := append([]Track(nil), current.Queue...)
+		track := queue[input.FromIndex]
+		queue = append(queue[:input.FromIndex], queue[input.FromIndex+1:]...)
+		insertAt := input.ToIndex
+		if input.FromIndex < insertAt {
+			insertAt--
+		}
+		queue = append(queue, Track{})
+		copy(queue[insertAt+1:], queue[insertAt:])
+		queue[insertAt] = track
+		current.Queue = queue
+	}
+	err := a.store.saveLocked()
+	a.store.mu.Unlock()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save queue")
+		return
+	}
+	view, _ := a.store.snapshot(session.ID)
+	respond(w, http.StatusOK, map[string]any{"session": a.view(view)})
+}
+
+// removeFromQueue intentionally excludes the currently playing item. That
+// keeps a drag-and-drop edit from unexpectedly interrupting the shared stream.
+func (a *API) removeFromQueue(w http.ResponseWriter, r *http.Request, session *Session, member Member) {
+	if !member.Host && !member.Permissions.CanQueue {
+		respondError(w, http.StatusForbidden, "queue permission required")
+		return
+	}
+	var input struct {
+		Index int `json:"index"`
+	}
+	if !decode(r, &input) {
+		respondError(w, http.StatusBadRequest, "index is required")
+		return
+	}
+	a.store.mu.Lock()
+	current := a.store.sessions[session.ID]
+	if current == nil {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if input.Index <= current.CurrentIndex || input.Index >= len(current.Queue) {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusBadRequest, "only upcoming tracks can be removed")
+		return
+	}
+	current.Queue = append(current.Queue[:input.Index], current.Queue[input.Index+1:]...)
+	err := a.store.saveLocked()
+	a.store.mu.Unlock()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save queue")
+		return
+	}
+	view, _ := a.store.snapshot(session.ID)
+	respond(w, http.StatusOK, map[string]any{"session": a.view(view)})
+}
+
+func (a *API) leave(w http.ResponseWriter, r *http.Request, session *Session, member Member) {
+	a.store.mu.Lock()
+	current := a.store.sessions[session.ID]
+	if current == nil {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if _, exists := current.Members[member.ID]; !exists {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusUnauthorized, "session membership required")
+		return
+	}
+	member.LastSeen = time.Time{}
+	current.Members[member.ID] = member
+	a.store.mu.Unlock()
+	respond(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *API) control(w http.ResponseWriter, r *http.Request, session *Session, member Member, action string) {
@@ -845,7 +970,9 @@ func (a *API) view(session *Session) sessionView {
 		view.Current = &public
 	}
 	for _, member := range session.Members {
-		view.Members = append(view.Members, member)
+		if memberIsActive(member, now) {
+			view.Members = append(view.Members, member)
+		}
 	}
 	sort.Slice(view.Members, func(i, j int) bool {
 		if view.Members[i].Host != view.Members[j].Host {
@@ -859,12 +986,37 @@ func (a *API) view(session *Session) sessionView {
 func (a *API) publicRoom(session *Session) publicRoomView {
 	view := publicRoomView{
 		ID: session.ID, Name: session.Name, RequiresPassword: session.PasswordHash != "", IsPlaying: session.IsPlaying,
-		ListenerCount: len(session.Members), CreatedAt: session.CreatedAt,
+		ListenerCount: activeMemberCount(session, time.Now()), CreatedAt: session.CreatedAt,
 	}
 	if current, ok := session.current(); ok {
 		view.Current = &publicRoomTrack{Title: current.Title, Artist: current.Artist}
 	}
 	return view
+}
+
+func memberIsActive(member Member, now time.Time) bool {
+	return !member.LastSeen.IsZero() && now.Sub(member.LastSeen) <= memberIdleTimeout
+}
+
+func activeMemberCount(session *Session, now time.Time) int {
+	count := 0
+	for _, member := range session.Members {
+		if memberIsActive(member, now) {
+			count++
+		}
+	}
+	return count
+}
+
+// Departed and timed-out members remain in the stored membership map, which
+// makes a page reload race-safe. Prune them when a new join occurs so old
+// browser sessions cannot reserve names indefinitely.
+func pruneInactiveMembers(session *Session, now time.Time) {
+	for id, member := range session.Members {
+		if !memberIsActive(member, now) {
+			delete(session.Members, id)
+		}
+	}
 }
 
 func normalizeTracks(items []responses.ResponseTrack) []Track {

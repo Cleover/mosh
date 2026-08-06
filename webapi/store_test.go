@@ -46,13 +46,26 @@ func TestAdminSessionViewFlattensPublicFieldsOnly(t *testing.T) {
 
 func TestSessionViewOrdersMembersStably(t *testing.T) {
 	api := &API{}
+	now := time.Now()
 	view := api.view(&Session{Members: map[string]Member{
-		"z":    {ID: "z", Username: "Zelda"},
-		"host": {ID: "host", Username: "Host", Host: true},
-		"a":    {ID: "a", Username: "alice"},
+		"z":    {ID: "z", Username: "Zelda", LastSeen: now},
+		"host": {ID: "host", Username: "Host", Host: true, LastSeen: now},
+		"a":    {ID: "a", Username: "alice", LastSeen: now},
 	}})
 	if len(view.Members) != 3 || view.Members[0].Username != "Host" || view.Members[1].Username != "alice" || view.Members[2].Username != "Zelda" {
 		t.Fatalf("members were not sorted predictably: %#v", view.Members)
+	}
+}
+
+func TestSessionViewHidesInactiveMembers(t *testing.T) {
+	api := &API{}
+	now := time.Now()
+	view := api.view(&Session{Members: map[string]Member{
+		"active": {ID: "active", Username: "Active", LastSeen: now},
+		"stale":  {ID: "stale", Username: "Stale", LastSeen: now.Add(-memberIdleTimeout - time.Second)},
+	}})
+	if len(view.Members) != 1 || view.Members[0].Username != "Active" {
+		t.Fatalf("expected only active listeners, got %#v", view.Members)
 	}
 }
 

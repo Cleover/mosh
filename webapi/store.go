@@ -30,6 +30,7 @@ type Member struct {
 	Username    string      `json:"username"`
 	Host        bool        `json:"host"`
 	Permissions Permissions `json:"permissions"`
+	LastSeen    time.Time   `json:"-"`
 }
 
 type Session struct {
