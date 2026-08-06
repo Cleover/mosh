@@ -1,0 +1,57 @@
+package webapi
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+)
+
+func TestStoreSnapshotIsIndependent(t *testing.T) {
+	store := &Store{sessions: map[string]*Session{
+		"room": {
+			ID: "room", Queue: []Track{{ID: "track"}}, Members: map[string]Member{"host": {ID: "host", Username: "Host"}},
+		},
+	}}
+	copy, ok := store.snapshot("room")
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	copy.Queue[0].Title = "changed"
+	copy.Members["host"] = Member{ID: "host", Username: "Changed"}
+	if store.sessions["room"].Queue[0].Title != "" || store.sessions["room"].Members["host"].Username != "Host" {
+		t.Fatal("snapshot mutated stored session")
+	}
+}
+
+func TestAdminSessionViewFlattensPublicFieldsOnly(t *testing.T) {
+	view := adminSessionView{
+		sessionView: sessionView{ID: "room", Queue: []publicTrack{{ID: "track"}}},
+		ShareToken:  "invite-token",
+	}
+	data, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["id"] != "room" || decoded["shareToken"] != "invite-token" {
+		t.Fatalf("unexpected admin view: %s", data)
+	}
+	if _, found := decoded["partPath"]; found {
+		t.Fatal("private Plex media path leaked into API response")
+	}
+}
+
+func TestSessionPositionAdvancesOnlyWhilePlaying(t *testing.T) {
+	now := time.Now()
+	session := Session{IsPlaying: true, PositionMS: 1000, PositionAt: now.Add(-1500 * time.Millisecond)}
+	if got := session.position(now); got < 2400 || got > 2600 {
+		t.Fatalf("unexpected playing position: %d", got)
+	}
+	session.IsPlaying = false
+	if got := session.position(now); got != 1000 {
+		t.Fatalf("unexpected paused position: %d", got)
+	}
+}

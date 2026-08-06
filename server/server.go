@@ -6,23 +6,30 @@ import (
 	"encoding/xml"
 	"io/ioutil"
 	"net/http"
+	urlpkg "net/url"
+	"time"
 
-	"github.com/adamrdrew/mosh/config"
+	configpkg "github.com/adamrdrew/mosh/config"
 	"github.com/adamrdrew/mosh/plex_urls"
 	"github.com/adamrdrew/mosh/responses"
 )
 
-func GetServer(config *config.Config) Server {
+func GetServer(config *configpkg.Config) Server {
 	server := Server{
 		Config:   config,
 		PlexURLs: plex_urls.GetPlexURLs(config),
 	}
-	server.getServerData()
+	// Interactive Mosh discovers the server through plex.tv. Container/web
+	// deployments supply PLEX_BASE_URL instead, so avoid an unnecessary remote
+	// discovery request and retain the configured LAN endpoint.
+	if config.Address == configpkg.UNINITIALIZED || config.Port == configpkg.UNINITIALIZED {
+		server.getServerData()
+	}
 	return server
 }
 
 type Server struct {
-	Config   *config.Config
+	Config   *configpkg.Config
 	PlexURLs plex_urls.PlexURLs
 }
 
@@ -33,15 +40,22 @@ func (s *Server) panic(err error) {
 }
 
 func (s *Server) doGet(urlString string) ([]byte, int) {
-	var client = http.Client{}
+	var client = http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", urlString, nil)
-	s.panic(err)
+	if err != nil {
+		return nil, 0
+	}
 
 	response, err := client.Do(req)
-	s.panic(err)
+	if err != nil {
+		return nil, 0
+	}
+	defer response.Body.Close()
 
 	body, err := ioutil.ReadAll(response.Body)
-	s.panic(err)
+	if err != nil {
+		return nil, 0
+	}
 
 	return body, response.StatusCode
 }
@@ -114,6 +128,22 @@ func (s *Server) SearchAlbums(albumName string) []responses.ResponseAlbumDirecto
 	return serverResponse.Directories
 }
 
+// SearchTracks mirrors Mosh's artist/album helpers but returns tracks for the
+// web API. It is a typed Plex library query, never shell command execution.
+func (s *Server) SearchTracks(trackName string) []responses.ResponseTrack {
+	url := s.PlexURLs.Server() + "/library/sections/" + s.Config.Library + "/all?type=10&title=" + urlpkg.QueryEscape(trackName) + "&X-Plex-Container-Start=0&X-Plex-Container-Size=50&X-Plex-Token=" + s.Config.Token
+	body, respCode := s.doGet(url)
+	if respCode != 200 {
+		return []responses.ResponseTrack{}
+	}
+
+	var response = new(responses.ResponseTracksMediaContainer)
+	if err := xml.Unmarshal(body, &response); err != nil {
+		return []responses.ResponseTrack{}
+	}
+	return response.Tracks
+}
+
 func (s *Server) GetAlbumsForArtist(artistID string) []responses.ResponseAlbumDirectory {
 	url := s.PlexURLs.GetChildren(artistID)
 	body, respCode := s.doGet(url)
@@ -141,6 +171,21 @@ func (s *Server) GetSongsForAlbum(albumID string) []responses.ResponseTrack {
 	s.panic(xmlError)
 
 	return serverResponse.Tracks
+}
+
+// GetTrack retrieves one Plex track by rating key for allowlisted web queue
+// actions. The caller supplies an ID, never an arbitrary Plex URL.
+func (s *Server) GetTrack(trackID string) (responses.ResponseTrack, bool) {
+	url := s.PlexURLs.MakeURL("/library/metadata/" + urlpkg.PathEscape(trackID))
+	body, respCode := s.doGet(url)
+	if respCode != 200 {
+		return responses.ResponseTrack{}, false
+	}
+	var response = new(responses.ResponseTracksMediaContainer)
+	if err := xml.Unmarshal(body, &response); err != nil || len(response.Tracks) == 0 {
+		return responses.ResponseTrack{}, false
+	}
+	return response.Tracks[0], true
 }
 
 func (s *Server) MakeURL(part string) string {

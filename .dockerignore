@@ -1,0 +1,6 @@
+.git
+.vscode
+docs
+README.md
+mosh-dev.sh
+config/config.yaml

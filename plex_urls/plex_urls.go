@@ -1,6 +1,7 @@
 package plex_urls
 
 import (
+	"net"
 	"net/url"
 
 	"github.com/adamrdrew/mosh/config"
@@ -25,7 +26,11 @@ type PlexURLs struct {
 }
 
 func (u *PlexURLs) Server() string {
-	return "http://" + u.Config.Address + ":" + u.Config.Port
+	scheme := u.Config.Scheme
+	if scheme != "https" {
+		scheme = "http"
+	}
+	return scheme + "://" + net.JoinHostPort(u.Config.Address, u.Config.Port)
 }
 
 func (u *PlexURLs) GetArt(query string) string {
