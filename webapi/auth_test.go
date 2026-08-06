@@ -3,6 +3,7 @@ package webapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -52,5 +53,30 @@ func TestHandlerRoutesDoNotDependOnMethodQualifiedMuxPatterns(t *testing.T) {
 	api.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected matched admin route to reject missing login with 401, got %d", response.Code)
+	}
+}
+
+func TestAdminCanCloseSession(t *testing.T) {
+	api := &API{
+		config:  AppConfig{InternalAPISecret: "internal-secret", SigningSecret: "01234567890123456789012345678901"},
+		limits:  newRateLimiter(),
+		streams: NewStreamHub("unused", "320k"),
+		store: &Store{path: filepath.Join(t.TempDir(), "sessions.json"), sessions: map[string]*Session{
+			"room": {ID: "room", Members: map[string]Member{}},
+		}},
+	}
+	cookieRecorder := httptest.NewRecorder()
+	api.issueCookie(cookieRecorder, adminCookie, claims{Role: "admin", Exp: time.Now().Add(time.Hour).Unix()})
+
+	request := httptest.NewRequest(http.MethodDelete, "/api/admin/sessions/room", nil)
+	request.Header.Set("X-Internal-API-Secret", "internal-secret")
+	request.AddCookie(cookieRecorder.Result().Cookies()[0])
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("close returned %d", response.Code)
+	}
+	if _, exists := api.store.sessions["room"]; exists {
+		t.Fatal("closed session remained in store")
 	}
 }

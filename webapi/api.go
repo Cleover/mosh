@@ -61,6 +61,7 @@ func (a *API) Handler() http.Handler {
 			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 	})
+	mux.HandleFunc("/api/admin/sessions/", requireMethod(http.MethodDelete, a.handleCloseSession))
 	mux.HandleFunc("/api/sessions/", a.handleSessionRoutes)
 	mux.HandleFunc("/api/art", requireMethod(http.MethodGet, a.handleArtwork))
 	return a.internalOnly(mux)
@@ -206,6 +207,37 @@ func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		items = append(items, adminSessionView{sessionView: a.view(session), ShareToken: a.shareToken(session.ID, session.ShareSecret)})
 	}
 	respond(w, http.StatusOK, map[string]any{"sessions": items})
+}
+
+func (a *API) handleCloseSession(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	sessionID := strings.TrimPrefix(r.URL.Path, "/api/admin/sessions/")
+	if sessionID == "" || strings.Contains(sessionID, "/") {
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	a.store.mu.Lock()
+	session := a.store.sessions[sessionID]
+	if session == nil {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	delete(a.store.sessions, sessionID)
+	if err := a.store.saveLocked(); err != nil {
+		a.store.sessions[sessionID] = session
+		a.store.mu.Unlock()
+		respondError(w, http.StatusInternalServerError, "failed to close session")
+		return
+	}
+	a.store.mu.Unlock()
+	a.streams.Stop(sessionID)
+	if claim, ok := a.readCookie(r, memberCookie); ok && claim.SessionID == sessionID {
+		clearCookie(w, memberCookie, a.config.SecureCookies)
+	}
+	respond(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
