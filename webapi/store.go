@@ -35,6 +35,7 @@ type Member struct {
 type Session struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
+	IsPublic      bool              `json:"isPublic"`
 	PasswordHash  string            `json:"passwordHash"`
 	ShareSecret   string            `json:"shareSecret"`
 	Queue         []Track           `json:"queue"`

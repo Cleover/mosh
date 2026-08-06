@@ -1,9 +1,11 @@
 package webapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +80,62 @@ func TestAdminCanCloseSession(t *testing.T) {
 	}
 	if _, exists := api.store.sessions["room"]; exists {
 		t.Fatal("closed session remained in store")
+	}
+}
+
+func TestPublicRoomsCanBeDiscoveredAndJoinedWithoutAnInvite(t *testing.T) {
+	api := &API{
+		config:  AppConfig{InternalAPISecret: "internal-secret", SigningSecret: "01234567890123456789012345678901"},
+		limits:  newRateLimiter(),
+		streams: NewStreamHub("unused", "320k"),
+		store: &Store{path: filepath.Join(t.TempDir(), "sessions.json"), sessions: map[string]*Session{
+			"public": {
+				ID: "public", Name: "Public room", IsPublic: true, ShareSecret: "public-share", CurrentIndex: -1,
+				Members: map[string]Member{"host": {ID: "host", Username: "Host", Host: true}}, CreatedAt: time.Now(),
+			},
+			"private": {
+				ID: "private", Name: "Private room", ShareSecret: "private-share", CurrentIndex: -1,
+				Members: map[string]Member{}, CreatedAt: time.Now(),
+			},
+		}},
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/public/sessions", nil)
+	listRequest.Header.Set("X-Internal-API-Secret", "internal-secret")
+	listResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("public list returned %d", listResponse.Code)
+	}
+	payload := listResponse.Body.Bytes()
+	if strings.Contains(string(payload), "share") {
+		t.Fatal("public listing leaked invite data")
+	}
+	var listing struct {
+		Sessions []publicRoomView `json:"sessions"`
+	}
+	if err := json.Unmarshal(payload, &listing); err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Sessions) != 1 || listing.Sessions[0].ID != "public" {
+		t.Fatalf("unexpected public listing: %#v", listing.Sessions)
+	}
+
+	joinRequest := httptest.NewRequest(http.MethodPost, "/api/sessions/public/join", strings.NewReader(`{"username":"Guest"}`))
+	joinRequest.Header.Set("Content-Type", "application/json")
+	joinRequest.Header.Set("X-Internal-API-Secret", "internal-secret")
+	joinResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(joinResponse, joinRequest)
+	if joinResponse.Code != http.StatusOK {
+		t.Fatalf("public join returned %d: %s", joinResponse.Code, joinResponse.Body.String())
+	}
+
+	privateJoin := httptest.NewRequest(http.MethodPost, "/api/sessions/private/join", strings.NewReader(`{"username":"Guest"}`))
+	privateJoin.Header.Set("Content-Type", "application/json")
+	privateJoin.Header.Set("X-Internal-API-Secret", "internal-secret")
+	privateResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(privateResponse, privateJoin)
+	if privateResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("private join without an invite returned %d", privateResponse.Code)
 	}
 }

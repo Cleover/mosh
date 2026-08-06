@@ -48,6 +48,7 @@ func (a *API) Handler() http.Handler {
 	}))
 	mux.HandleFunc("/api/auth/admin/login", requireMethod(http.MethodPost, a.handleAdminLogin))
 	mux.HandleFunc("/api/auth/admin/logout", requireMethod(http.MethodPost, a.handleAdminLogout))
+	mux.HandleFunc("/api/public/sessions", requireMethod(http.MethodGet, a.handlePublicSessions))
 	mux.HandleFunc("/api/admin/library/artists", requireMethod(http.MethodGet, a.handleArtists))
 	mux.HandleFunc("/api/admin/library/albums", requireMethod(http.MethodGet, a.handleAlbums))
 	mux.HandleFunc("/api/admin/library/tracks", requireMethod(http.MethodGet, a.handleTracks))
@@ -165,6 +166,7 @@ func (a *API) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Public   bool   `json:"public"`
 	}
 	if !decode(r, &input) || len(strings.TrimSpace(input.Name)) == 0 || !validUsername(input.Username) {
 		respondError(w, http.StatusBadRequest, "name and a 2-24 character username are required")
@@ -176,7 +178,7 @@ func (a *API) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	session := &Session{
-		ID: id("session"), Name: strings.TrimSpace(input.Name), ShareSecret: id("share"), CurrentIndex: -1,
+		ID: id("session"), Name: strings.TrimSpace(input.Name), IsPublic: input.Public, ShareSecret: id("share"), CurrentIndex: -1,
 		Members: map[string]Member{}, CreatedAt: now, PositionAt: now,
 	}
 	if input.Password != "" {
@@ -206,6 +208,22 @@ func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	for _, session := range a.store.sessions {
 		items = append(items, adminSessionView{sessionView: a.view(session), ShareToken: a.shareToken(session.ID, session.ShareSecret)})
 	}
+	respond(w, http.StatusOK, map[string]any{"sessions": items})
+}
+
+// handlePublicSessions intentionally exposes only discovery information. The
+// queue, stream URL, member identities, and invite secret remain private until
+// someone has joined a room.
+func (a *API) handlePublicSessions(w http.ResponseWriter, r *http.Request) {
+	a.store.mu.RLock()
+	items := make([]publicRoomView, 0, len(a.store.sessions))
+	for _, session := range a.store.sessions {
+		if session.IsPublic {
+			items = append(items, a.publicRoom(session))
+		}
+	}
+	a.store.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
 	respond(w, http.StatusOK, map[string]any{"sessions": items})
 }
 
@@ -292,10 +310,8 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) preview(w http.ResponseWriter, r *http.Request, sessionID string) {
-	a.store.mu.RLock()
-	session := a.store.sessions[sessionID]
-	a.store.mu.RUnlock()
-	if session == nil || !a.validShare(sessionID, r.URL.Query().Get("t"), session.ShareSecret) {
+	session, ok := a.store.snapshot(sessionID)
+	if !ok || (!session.IsPublic && !a.validShare(sessionID, r.URL.Query().Get("t"), session.ShareSecret)) {
 		respondError(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -318,7 +334,7 @@ func (a *API) join(w http.ResponseWriter, r *http.Request, sessionID string) {
 	}
 	a.store.mu.Lock()
 	session := a.store.sessions[sessionID]
-	if session == nil || !a.validShare(sessionID, input.ShareToken, session.ShareSecret) {
+	if session == nil || (!session.IsPublic && !a.validShare(sessionID, input.ShareToken, session.ShareSecret)) {
 		a.store.mu.Unlock()
 		respondError(w, http.StatusUnauthorized, "invalid share link")
 		return
@@ -788,6 +804,7 @@ type publicAlbum struct {
 type sessionView struct {
 	ID            string        `json:"id"`
 	Name          string        `json:"name"`
+	IsPublic      bool          `json:"isPublic"`
 	Queue         []publicTrack `json:"queue"`
 	CurrentIndex  int           `json:"currentIndex"`
 	Current       *publicTrack  `json:"currentTrack,omitempty"`
@@ -796,6 +813,21 @@ type sessionView struct {
 	StreamVersion int64         `json:"streamVersion"`
 	Members       []Member      `json:"members"`
 	CreatedAt     time.Time     `json:"createdAt"`
+}
+
+type publicRoomTrack struct {
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
+}
+
+type publicRoomView struct {
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	RequiresPassword bool             `json:"requiresPassword"`
+	Current          *publicRoomTrack `json:"currentTrack,omitempty"`
+	IsPlaying        bool             `json:"isPlaying"`
+	ListenerCount    int              `json:"listenerCount"`
+	CreatedAt        time.Time        `json:"createdAt"`
 }
 
 // The share token is deliberately only included in the authenticated admin
@@ -807,7 +839,7 @@ type adminSessionView struct {
 
 func (a *API) view(session *Session) sessionView {
 	now := time.Now()
-	view := sessionView{ID: session.ID, Name: session.Name, Queue: publicTracks(session.Queue), CurrentIndex: session.CurrentIndex, IsPlaying: session.IsPlaying, PositionMS: session.position(now), StreamVersion: session.StreamVersion, CreatedAt: session.CreatedAt}
+	view := sessionView{ID: session.ID, Name: session.Name, IsPublic: session.IsPublic, Queue: publicTracks(session.Queue), CurrentIndex: session.CurrentIndex, IsPlaying: session.IsPlaying, PositionMS: session.position(now), StreamVersion: session.StreamVersion, CreatedAt: session.CreatedAt}
 	if current, ok := session.current(); ok {
 		public := publicTrackFor(current)
 		view.Current = &public
@@ -821,6 +853,17 @@ func (a *API) view(session *Session) sessionView {
 		}
 		return strings.ToLower(view.Members[i].Username) < strings.ToLower(view.Members[j].Username)
 	})
+	return view
+}
+
+func (a *API) publicRoom(session *Session) publicRoomView {
+	view := publicRoomView{
+		ID: session.ID, Name: session.Name, RequiresPassword: session.PasswordHash != "", IsPlaying: session.IsPlaying,
+		ListenerCount: len(session.Members), CreatedAt: session.CreatedAt,
+	}
+	if current, ok := session.current(); ok {
+		view.Current = &publicRoomTrack{Title: current.Title, Artist: current.Artist}
+	}
 	return view
 }
 
