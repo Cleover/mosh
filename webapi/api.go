@@ -395,18 +395,39 @@ func (a *API) addQueue(w http.ResponseWriter, r *http.Request, session *Session,
 		respondError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	current.Queue = append(current.Queue, tracks...)
-	if current.CurrentIndex < 0 {
+	_, hasCurrent := current.current()
+	shouldStart := false
+	var track Track
+	var position, version int64
+	if !hasCurrent {
+		// A room with no current track is either brand new or has naturally
+		// exhausted its queue. Start a fresh queue instead of retaining the
+		// finished tracks, and begin streaming the first new addition.
+		current.Queue = append([]Track(nil), tracks...)
 		current.CurrentIndex = 0
 		current.PositionMS = 0
 		current.PositionAt = time.Now()
+		current.IsPlaying = true
 		current.StreamVersion++
+		track, _ = current.current()
+		position = current.PositionMS
+		version = current.StreamVersion
+		shouldStart = true
+	} else {
+		current.Queue = append(current.Queue, tracks...)
 	}
 	err := a.store.saveLocked()
 	a.store.mu.Unlock()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to save queue")
 		return
+	}
+	if shouldStart {
+		if err := a.startStream(session.ID, track, position); err != nil {
+			a.pauseForStreamFailure(session.ID, version)
+			respondError(w, http.StatusBadGateway, "could not start Plex stream")
+			return
+		}
 	}
 	view, _ := a.store.snapshot(current.ID)
 	respond(w, http.StatusOK, map[string]any{"session": a.view(view)})
@@ -643,8 +664,13 @@ func (a *API) advanceAtEnd(sessionID, trackID string, version, remainingMS int64
 	now := time.Now()
 	nextIndex := session.CurrentIndex + 1
 	if nextIndex >= len(session.Queue) {
+		// A completed room has no now-playing track and no remaining queue.
+		// Clearing both avoids a stale final track in clients and lets the next
+		// queued item start as a fresh shared stream.
+		session.Queue = nil
+		session.CurrentIndex = -1
 		session.IsPlaying = false
-		session.PositionMS = current.DurationMS
+		session.PositionMS = 0
 		session.PositionAt = now
 		session.StreamVersion++
 		err := a.store.saveLocked()
