@@ -473,16 +473,19 @@ func (a *API) addQueue(w http.ResponseWriter, r *http.Request, session *Session,
 		return
 	}
 	var input struct {
-		TrackID string `json:"trackId"`
-		AlbumID string `json:"albumId"`
+		TrackID  string `json:"trackId"`
+		AlbumID  string `json:"albumId"`
+		ArtistID string `json:"artistId"`
 	}
-	if !decode(r, &input) || (input.TrackID == "" && input.AlbumID == "") {
-		respondError(w, http.StatusBadRequest, "trackId or albumId is required")
+	if !decode(r, &input) || (input.TrackID == "" && input.AlbumID == "" && input.ArtistID == "") {
+		respondError(w, http.StatusBadRequest, "trackId, albumId, or artistId is required")
 		return
 	}
 	var tracks []Track
 	if input.AlbumID != "" {
 		tracks, _ = a.library.tracksForAlbum(input.AlbumID)
+	} else if input.ArtistID != "" {
+		tracks, _ = a.library.tracksForArtist(input.ArtistID)
 	} else if track, found := a.library.track(input.TrackID); found {
 		tracks = []Track{track}
 	}
@@ -978,7 +981,9 @@ type publicTrack struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Artist      string   `json:"artist"`
+	ArtistID    string   `json:"artistId,omitempty"`
 	Album       string   `json:"album"`
+	AlbumID     string   `json:"albumId,omitempty"`
 	Artwork     string   `json:"artwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
 	SearchTerms []string `json:"searchTerms,omitempty"`
@@ -997,6 +1002,9 @@ type publicAlbum struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Artist      string   `json:"artist"`
+	ArtistID    string   `json:"artistId,omitempty"`
+	Year        int      `json:"year,omitempty"`
+	SubType     string   `json:"subtype,omitempty"`
 	Artwork     string   `json:"artwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
 	SearchTerms []string `json:"searchTerms,omitempty"`
@@ -1099,13 +1107,13 @@ func normalizeTracks(items []responses.ResponseTrack) []Track {
 	for _, item := range items {
 		if item.GetPath() != "" {
 			trackIndex, _ := strconv.Atoi(item.Index)
-			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, PartPath: item.GetPath(), Artwork: item.Image, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.GrandParentTitleSort, item.ParentTitleSort), DurationMS: item.Duration})
+			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, ArtistID: item.GrandParentRatingKey, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, PartPath: item.GetPath(), Artwork: item.Image, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.GrandParentTitleSort, item.ParentTitleSort), DurationMS: item.Duration})
 		}
 	}
 	return tracks
 }
 func publicTrackFor(track Track) publicTrack {
-	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, Album: track.Album, Artwork: track.Artwork, BlurHash: track.BlurHash, SearchTerms: track.SearchTerms, DurationMS: track.DurationMS}
+	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, ArtistID: track.ArtistID, Album: track.Album, AlbumID: track.AlbumID, Artwork: track.Artwork, BlurHash: track.BlurHash, SearchTerms: track.SearchTerms, DurationMS: track.DurationMS}
 }
 func publicTracks(tracks []Track) []publicTrack {
 	result := make([]publicTrack, 0, len(tracks))
@@ -1126,7 +1134,7 @@ func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 func publicAlbums(items []responses.ResponseAlbumDirectory) []publicAlbum {
 	result := make([]publicAlbum, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.ParentTitleSort)})
+		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, ArtistID: item.ParentRatingKey, Year: item.Year, SubType: item.SubType, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.ParentTitleSort)})
 	}
 	return result
 }

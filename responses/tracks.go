@@ -41,6 +41,8 @@ type ResponseTrack struct {
 	ParentTitleSort string `xml:"parentTitleSort,attr"`
 	//The album rating key lets the web API resolve a cached album into tracks.
 	ParentRatingKey string `xml:"parentRatingKey,attr"`
+	//The artist rating key lets the web API resolve a cached artist into tracks.
+	GrandParentRatingKey string `xml:"grandparentRatingKey,attr"`
 	//Album Name
 	GrandParentTitle     string             `xml:"grandparentTitle,attr"`
 	GrandParentTitleSort string             `xml:"grandparentTitleSort,attr"`

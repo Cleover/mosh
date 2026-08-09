@@ -30,18 +30,20 @@ type libraryCache struct {
 	ready      bool
 	refreshing bool
 
-	tracks        []Track
-	albums        []publicAlbum
-	artists       []publicArtist
-	tracksByID    map[string]Track
-	tracksByAlbum map[string][]Track
-	refreshedAt   time.Time
+	tracks         []Track
+	albums         []publicAlbum
+	artists        []publicArtist
+	tracksByID     map[string]Track
+	tracksByAlbum  map[string][]Track
+	tracksByArtist map[string][]Track
+	refreshedAt    time.Time
 }
 
 func newLibraryCache() *libraryCache {
 	return &libraryCache{
-		tracksByID:    make(map[string]Track),
-		tracksByAlbum: make(map[string][]Track),
+		tracksByID:     make(map[string]Track),
+		tracksByAlbum:  make(map[string][]Track),
+		tracksByArtist: make(map[string][]Track),
 	}
 }
 
@@ -96,10 +98,14 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 
 	tracksByID := make(map[string]Track, len(tracks))
 	tracksByAlbum := make(map[string][]Track)
+	tracksByArtist := make(map[string][]Track)
 	for _, track := range tracks {
 		tracksByID[track.ID] = track
 		if track.AlbumID != "" {
 			tracksByAlbum[track.AlbumID] = append(tracksByAlbum[track.AlbumID], track)
+		}
+		if track.ArtistID != "" {
+			tracksByArtist[track.ArtistID] = append(tracksByArtist[track.ArtistID], track)
 		}
 	}
 	for albumID := range tracksByAlbum {
@@ -120,6 +126,7 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	cache.artists = artists
 	cache.tracksByID = tracksByID
 	cache.tracksByAlbum = tracksByAlbum
+	cache.tracksByArtist = tracksByArtist
 	cache.refreshedAt = refreshedAt
 	cache.ready = true
 	cache.mu.Unlock()
@@ -238,6 +245,15 @@ func (c *libraryCache) tracksForAlbum(id string) ([]Track, bool) {
 		return nil, false
 	}
 	return append([]Track(nil), c.tracksByAlbum[id]...), true
+}
+
+func (c *libraryCache) tracksForArtist(id string) ([]Track, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.ready {
+		return nil, false
+	}
+	return append([]Track(nil), c.tracksByArtist[id]...), true
 }
 
 func (c *libraryCache) allTracks() ([]Track, libraryStatus, bool) {

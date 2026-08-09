@@ -10,13 +10,14 @@ func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 	cache := newLibraryCache()
 	cache.ready = true
 	cache.tracks = []Track{
-		{ID: "track-1", Title: "Blue Sky", Artist: "The Echoes", Album: "First Light", AlbumID: "album-1", TrackIndex: 2},
-		{ID: "track-2", Title: "Morning Glow", Artist: "The Echoes", Album: "First Light", AlbumID: "album-1", TrackIndex: 1},
+		{ID: "track-1", Title: "Blue Sky", Artist: "The Echoes", ArtistID: "artist-1", Album: "First Light", AlbumID: "album-1", TrackIndex: 2},
+		{ID: "track-2", Title: "Morning Glow", Artist: "The Echoes", ArtistID: "artist-1", Album: "First Light", AlbumID: "album-1", TrackIndex: 1},
 	}
 	cache.albums = []publicAlbum{{ID: "album-1", Title: "First Light", Artist: "The Echoes"}}
 	cache.artists = []publicArtist{{ID: "artist-1", Title: "The Echoes"}}
 	cache.tracksByID = map[string]Track{"track-1": cache.tracks[0], "track-2": cache.tracks[1]}
 	cache.tracksByAlbum = map[string][]Track{"album-1": {cache.tracks[1], cache.tracks[0]}}
+	cache.tracksByArtist = map[string][]Track{"artist-1": {cache.tracks[0], cache.tracks[1]}}
 
 	tracks, ready := cache.searchTracks("echo")
 	if !ready || len(tracks) != 2 {
@@ -38,6 +39,14 @@ func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 	albumTracks[0].Title = "changed"
 	if cache.tracksByAlbum["album-1"][0].Title == "changed" {
 		t.Fatal("tracksForAlbum returned a mutable cache slice")
+	}
+	artistTracks, found := cache.tracksForArtist("artist-1")
+	if !found || len(artistTracks) != 2 {
+		t.Fatalf("tracksForArtist() = %#v, found %t", artistTracks, found)
+	}
+	artistTracks[0].Title = "changed"
+	if cache.tracksByArtist["artist-1"][0].Title == "changed" {
+		t.Fatal("tracksForArtist returned a mutable cache slice")
 	}
 }
 

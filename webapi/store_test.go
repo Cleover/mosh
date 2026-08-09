@@ -126,3 +126,10 @@ func TestUniqueSearchTermsOmitsDuplicateAndEmptySortKeys(t *testing.T) {
 		t.Fatalf("unexpected search terms: %#v", terms)
 	}
 }
+
+func TestPublicTrackIncludesLibraryNavigationIDs(t *testing.T) {
+	view := publicTrackFor(Track{ID: "track", ArtistID: "artist", AlbumID: "album"})
+	if view.ArtistID != "artist" || view.AlbumID != "album" {
+		t.Fatalf("navigation IDs were not exposed: %#v", view)
+	}
+}

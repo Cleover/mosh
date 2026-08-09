@@ -7,7 +7,7 @@ import (
 
 func TestTrackAudioStreamAndLoudnessResponse(t *testing.T) {
 	var track ResponseTrack
-	if err := xml.Unmarshal([]byte(`<Track titleSort="Romanized track" parentTitleSort="Romanized album" grandparentTitleSort="Romanized artist" thumbBlurHash="L4F5?^_3_3t7~qM{t7M{?b9FM{of"><Media><Part key="/library/parts/1/file"><Stream id="video" streamType="1"/><Stream id="audio" streamType="2"/></Part></Media></Track>`), &track); err != nil {
+	if err := xml.Unmarshal([]byte(`<Track grandparentRatingKey="artist-id" titleSort="Romanized track" parentTitleSort="Romanized album" grandparentTitleSort="Romanized artist" thumbBlurHash="L4F5?^_3_3t7~qM{t7M{?b9FM{of"><Media><Part key="/library/parts/1/file"><Stream id="video" streamType="1"/><Stream id="audio" streamType="2"/></Part></Media></Track>`), &track); err != nil {
 		t.Fatal(err)
 	}
 	if got := track.AudioStreamID(); got != "audio" {
@@ -18,6 +18,9 @@ func TestTrackAudioStreamAndLoudnessResponse(t *testing.T) {
 	}
 	if track.TitleSort != "Romanized track" || track.ParentTitleSort != "Romanized album" || track.GrandParentTitleSort != "Romanized artist" {
 		t.Fatalf("sort metadata was not decoded: %#v", track)
+	}
+	if track.GrandParentRatingKey != "artist-id" {
+		t.Fatalf("GrandParentRatingKey = %q", track.GrandParentRatingKey)
 	}
 
 	var levels ResponseLoudnessLevelsMediaContainer
