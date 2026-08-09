@@ -73,7 +73,16 @@ func (a *API) Handler() http.Handler {
 			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 	})
-	mux.HandleFunc("/api/admin/sessions/", requireMethod(http.MethodDelete, a.handleCloseSession))
+	mux.HandleFunc("/api/admin/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			a.handleCloseSession(w, r)
+		case http.MethodPatch:
+			a.handleUpdateSession(w, r)
+		default:
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
 	mux.HandleFunc("/api/sessions/", a.handleSessionRoutes)
 	mux.HandleFunc("/api/art", requireMethod(http.MethodGet, a.handleArtwork))
 	return a.internalOnly(mux)
@@ -256,7 +265,7 @@ func (a *API) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.issueCookie(w, memberCookie, claims{Role: "member", SessionID: session.ID, MemberID: host.ID, Exp: now.Add(24 * time.Hour).Unix()})
-	respond(w, http.StatusCreated, map[string]any{"session": a.view(session), "shareToken": a.shareToken(session.ID, session.ShareSecret)})
+	respond(w, http.StatusCreated, map[string]any{"session": a.adminRoom(session), "shareToken": a.shareToken(session.ID, session.ShareSecret)})
 }
 
 func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -267,8 +276,9 @@ func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	defer a.store.mu.RUnlock()
 	items := make([]adminSessionView, 0, len(a.store.sessions))
 	for _, session := range a.store.sessions {
-		items = append(items, adminSessionView{sessionView: a.view(session), ShareToken: a.shareToken(session.ID, session.ShareSecret)})
+		items = append(items, a.adminRoom(session))
 	}
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
 	respond(w, http.StatusOK, map[string]any{"sessions": items})
 }
 
@@ -317,6 +327,57 @@ func (a *API) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 		clearCookie(w, memberCookie, a.config.SecureCookies)
 	}
 	respond(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleUpdateSession deliberately has a very small writable surface: the
+// admin can change room discovery and access, but playback remains owned by
+// the normal room UI and its room-level permissions.
+func (a *API) handleUpdateSession(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	sessionID := strings.TrimPrefix(r.URL.Path, "/api/admin/sessions/")
+	if sessionID == "" || strings.Contains(sessionID, "/") {
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	var input struct {
+		Public   *bool   `json:"public"`
+		Password *string `json:"password"`
+	}
+	if !decode(r, &input) || (input.Public == nil && input.Password == nil) {
+		respondError(w, http.StatusBadRequest, "at least one room setting is required")
+		return
+	}
+	if input.Password != nil && *input.Password != "" && len(*input.Password) < 4 {
+		respondError(w, http.StatusBadRequest, "session password must be at least 4 characters")
+		return
+	}
+	a.store.mu.Lock()
+	session := a.store.sessions[sessionID]
+	if session == nil {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if input.Public != nil {
+		session.IsPublic = *input.Public
+	}
+	if input.Password != nil {
+		if *input.Password == "" {
+			session.PasswordHash = ""
+		} else {
+			session.PasswordHash = hashPassword(*input.Password)
+		}
+	}
+	err := a.store.saveLocked()
+	copy := cloneSession(session)
+	a.store.mu.Unlock()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save room settings")
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"session": a.adminRoom(copy)})
 }
 
 func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +452,7 @@ func (a *API) preview(w http.ResponseWriter, r *http.Request, sessionID string) 
 		respondError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	respond(w, http.StatusOK, map[string]any{"id": session.ID, "name": session.Name, "requiresPassword": session.PasswordHash != ""})
+	respond(w, http.StatusOK, a.publicRoom(session))
 }
 
 func (a *API) join(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -1074,6 +1135,7 @@ type sessionView struct {
 type publicRoomTrack struct {
 	Title  string `json:"title"`
 	Artist string `json:"artist"`
+	Album  string `json:"album,omitempty"`
 }
 
 type publicRoomView struct {
@@ -1090,7 +1152,8 @@ type publicRoomView struct {
 // listing. Normal session views never disclose it to guests.
 type adminSessionView struct {
 	sessionView
-	ShareToken string `json:"shareToken"`
+	ShareToken       string `json:"shareToken"`
+	RequiresPassword bool   `json:"requiresPassword"`
 }
 
 func (a *API) view(session *Session) sessionView {
@@ -1123,9 +1186,17 @@ func (a *API) publicRoom(session *Session) publicRoomView {
 		ListenerCount: activeMemberCount(session, time.Now()), CreatedAt: session.CreatedAt,
 	}
 	if current, ok := session.current(); ok {
-		view.Current = &publicRoomTrack{Title: current.Title, Artist: current.Artist}
+		view.Current = &publicRoomTrack{Title: current.Title, Artist: current.Artist, Album: current.Album}
 	}
 	return view
+}
+
+func (a *API) adminRoom(session *Session) adminSessionView {
+	return adminSessionView{
+		sessionView:      a.view(session),
+		ShareToken:       a.shareToken(session.ID, session.ShareSecret),
+		RequiresPassword: session.PasswordHash != "",
+	}
 }
 
 func memberIsActive(member Member, now time.Time) bool {

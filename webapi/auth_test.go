@@ -94,6 +94,42 @@ func TestAdminCanCloseSession(t *testing.T) {
 	}
 }
 
+func TestAdminCanUpdateRoomAccess(t *testing.T) {
+	api := &API{
+		config: AppConfig{InternalAPISecret: "internal-secret", SigningSecret: "01234567890123456789012345678901"},
+		limits: newRateLimiter(),
+		store: &Store{path: filepath.Join(t.TempDir(), "sessions.json"), sessions: map[string]*Session{
+			"room": {ID: "room", Members: map[string]Member{}},
+		}},
+	}
+	cookieRecorder := httptest.NewRecorder()
+	api.issueCookie(cookieRecorder, adminCookie, claims{Role: "admin", Exp: time.Now().Add(time.Hour).Unix()})
+
+	request := httptest.NewRequest(http.MethodPatch, "/api/admin/sessions/room", strings.NewReader(`{"public":true,"password":"secret"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Internal-API-Secret", "internal-secret")
+	request.AddCookie(cookieRecorder.Result().Cookies()[0])
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("update returned %d: %s", response.Code, response.Body.String())
+	}
+	room := api.store.sessions["room"]
+	if !room.IsPublic || !verifyPassword("secret", room.PasswordHash) {
+		t.Fatalf("room access settings were not persisted: %#v", room)
+	}
+
+	clearPassword := httptest.NewRequest(http.MethodPatch, "/api/admin/sessions/room", strings.NewReader(`{"password":""}`))
+	clearPassword.Header.Set("Content-Type", "application/json")
+	clearPassword.Header.Set("X-Internal-API-Secret", "internal-secret")
+	clearPassword.AddCookie(cookieRecorder.Result().Cookies()[0])
+	clearResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(clearResponse, clearPassword)
+	if clearResponse.Code != http.StatusOK || api.store.sessions["room"].PasswordHash != "" {
+		t.Fatalf("room password was not cleared: status=%d", clearResponse.Code)
+	}
+}
+
 func TestPublicRoomsCanBeDiscoveredAndJoinedWithoutAnInvite(t *testing.T) {
 	api := &API{
 		config:  AppConfig{InternalAPISecret: "internal-secret", SigningSecret: "01234567890123456789012345678901"},
