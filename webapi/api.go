@@ -56,6 +56,7 @@ func (a *API) Handler() http.Handler {
 	}))
 	mux.HandleFunc("/api/auth/admin/login", requireMethod(http.MethodPost, a.handleAdminLogin))
 	mux.HandleFunc("/api/auth/admin/logout", requireMethod(http.MethodPost, a.handleAdminLogout))
+	mux.HandleFunc("/api/auth/logout", requireMethod(http.MethodPost, a.handleLogout))
 	mux.HandleFunc("/api/public/sessions", requireMethod(http.MethodGet, a.handlePublicSessions))
 	mux.HandleFunc("/api/admin/library/artists", requireMethod(http.MethodGet, a.handleArtists))
 	mux.HandleFunc("/api/admin/library/albums", requireMethod(http.MethodGet, a.handleAlbums))
@@ -114,6 +115,28 @@ func (a *API) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	clearCookie(w, adminCookie, a.config.SecureCookies)
+	respond(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleLogout signs a browser out of either type of room identity. Marking a
+// member as departed keeps the room roster accurate immediately instead of
+// waiting for the normal inactivity timeout.
+func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if member, ok := a.readCookie(r, memberCookie); ok && member.Role == "member" {
+		a.store.mu.Lock()
+		if session := a.store.sessions[member.SessionID]; session != nil {
+			if current, exists := session.Members[member.MemberID]; exists {
+				current.LastSeen = time.Time{}
+				session.Members[member.MemberID] = current
+				if err := a.store.saveLocked(); err != nil {
+					log.Printf("could not persist member logout: %v", err)
+				}
+			}
+		}
+		a.store.mu.Unlock()
+	}
+	clearCookie(w, memberCookie, a.config.SecureCookies)
 	clearCookie(w, adminCookie, a.config.SecureCookies)
 	respond(w, http.StatusOK, map[string]bool{"ok": true})
 }
