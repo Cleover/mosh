@@ -12,7 +12,16 @@ import (
 	"time"
 )
 
-const streamPreloadLead = 2500 * time.Millisecond
+const (
+	streamPreloadLead = 2500 * time.Millisecond
+	pcmSampleRate     = int64(48000)
+	pcmChannels       = int64(2)
+	pcmBytesPerSample = int64(2)
+	pcmBytesPerFrame  = pcmChannels * pcmBytesPerSample
+	pcmBytesPerSecond = pcmSampleRate * pcmBytesPerFrame
+	pcmPaceChunkBytes = 3840 // 20 ms at 48 kHz, 16-bit stereo
+	pcmPaceChunkDelay = 20 * time.Millisecond
+)
 
 // streamTrack is the private audio input for one queue entry. It deliberately
 // keeps Plex URLs out of API responses while letting the stream runner prepare
@@ -123,7 +132,7 @@ func (h *StreamHub) run(sessionID string, ctx context.Context, stream *liveStrea
 	for {
 		h.setDecoder(stream, decoder, current.Track.ID)
 		cancelPreload, prepared := h.preloadNext(ctx, current, callbacks)
-		copyErr := h.copyDecoder(stream, decoder)
+		copyErr := h.copyDecoder(ctx, stream, decoder)
 		waitErr := decoder.cmd.Wait()
 		h.clearDecoder(stream, decoder.cmd)
 
@@ -173,7 +182,7 @@ func (h *StreamHub) startDecoder(ctx context.Context, input streamTrack) (*decod
 		args = append(args, "-ss", formatSeconds(input.StartMS))
 	}
 	args = append(args,
-		"-re", "-i", input.SourceURL,
+		"-i", input.SourceURL,
 		"-vn", "-map", "0:a:0", "-ac", "2", "-ar", "48000",
 		"-f", "s16le", "pipe:1",
 	)
@@ -188,10 +197,80 @@ func (h *StreamHub) startDecoder(ctx context.Context, input streamTrack) (*decod
 	return &decoderProcess{cmd: cmd, output: output, track: input}, nil
 }
 
-func (h *StreamHub) copyDecoder(stream *liveStream, decoder *decoderProcess) error {
-	_, err := io.Copy(stream.encoderInput, decoder.output)
-	_ = decoder.output.Close()
-	return err
+// copyDecoder is the room clock. FFmpeg deliberately decodes as quickly as
+// the pipe permits, while this writer feeds fixed PCM frames to the persistent
+// encoder at real time. That lets a preloaded decoder wait with its first PCM
+// frames ready without FFmpeg's -re clock trying to catch up and dumping part
+// of the following track into the encoder early.
+func (h *StreamHub) copyDecoder(ctx context.Context, stream *liveStream, decoder *decoderProcess) error {
+	defer decoder.output.Close()
+	pacer := pcmPacer{}
+	buffer := make([]byte, 32*1024)
+	for {
+		count, readErr := decoder.output.Read(buffer)
+		if count > 0 {
+			if err := pacer.write(ctx, stream.encoderInput, buffer[:count]); err != nil {
+				return err
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		return readErr
+	}
+}
+
+type pcmPacer struct {
+	started time.Time
+	written int64
+}
+
+func (p *pcmPacer) write(ctx context.Context, destination io.Writer, pcm []byte) error {
+	for len(pcm) > 0 {
+		chunkSize := pcmPaceChunkBytes
+		if len(pcm) < chunkSize {
+			chunkSize = len(pcm)
+		}
+		written, err := destination.Write(pcm[:chunkSize])
+		if written > 0 {
+			p.written += int64(written)
+			pcm = pcm[written:]
+		}
+		if err != nil {
+			return err
+		}
+		if written != chunkSize {
+			return io.ErrShortWrite
+		}
+		if p.started.IsZero() {
+			p.started = time.Now()
+		}
+		deadline := p.started.Add(time.Duration(p.written) * time.Second / time.Duration(pcmBytesPerSecond))
+		// A Plex read can occasionally stall. Do not then write a backlog at
+		// encoder speed: restart the local pacing clock at the live edge instead.
+		if lag := time.Since(deadline); lag > pcmPaceChunkDelay {
+			p.started = p.started.Add(lag)
+			deadline = deadline.Add(lag)
+		}
+		if delay := time.Until(deadline); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return ctx.Err()
+			}
+		}
+	}
+	return nil
 }
 
 // preloadNext opens and probes the next Plex input before the current decoder
