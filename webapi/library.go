@@ -111,6 +111,16 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	for albumID := range tracksByAlbum {
 		sort.SliceStable(tracksByAlbum[albumID], func(i, j int) bool {
 			left, right := tracksByAlbum[albumID][i], tracksByAlbum[albumID][j]
+			leftDisc, rightDisc := left.DiscIndex, right.DiscIndex
+			if leftDisc <= 0 {
+				leftDisc = 1
+			}
+			if rightDisc <= 0 {
+				rightDisc = 1
+			}
+			if leftDisc != rightDisc {
+				return leftDisc < rightDisc
+			}
 			if left.TrackIndex > 0 && right.TrackIndex > 0 && left.TrackIndex != right.TrackIndex {
 				return left.TrackIndex < right.TrackIndex
 			}

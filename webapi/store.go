@@ -18,6 +18,7 @@ type Track struct {
 	AlbumID     string   `json:"-"`
 	ArtistID    string   `json:"-"`
 	TrackIndex  int      `json:"-"`
+	DiscIndex   int      `json:"-"`
 	PartPath    string   `json:"partPath"`
 	Artwork     string   `json:"artwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`

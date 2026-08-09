@@ -146,9 +146,9 @@ func TestUniqueSearchTermsOmitsDuplicateAndEmptySortKeys(t *testing.T) {
 	}
 }
 
-func TestPublicTrackIncludesLibraryNavigationIDs(t *testing.T) {
-	view := publicTrackFor(Track{ID: "track", ArtistID: "artist", AlbumID: "album"})
-	if view.ArtistID != "artist" || view.AlbumID != "album" {
-		t.Fatalf("navigation IDs were not exposed: %#v", view)
+func TestPublicTrackIncludesLibraryNavigationAndOrderMetadata(t *testing.T) {
+	view := publicTrackFor(Track{ID: "track", ArtistID: "artist", AlbumID: "album", DiscIndex: 2, TrackIndex: 3})
+	if view.ArtistID != "artist" || view.AlbumID != "album" || view.DiscIndex != 2 || view.TrackIndex != 3 {
+		t.Fatalf("library metadata was not exposed: %#v", view)
 	}
 }

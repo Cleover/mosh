@@ -1005,6 +1005,8 @@ type publicTrack struct {
 	ArtistID    string   `json:"artistId,omitempty"`
 	Album       string   `json:"album"`
 	AlbumID     string   `json:"albumId,omitempty"`
+	TrackIndex  int      `json:"trackIndex,omitempty"`
+	DiscIndex   int      `json:"discIndex,omitempty"`
 	Artwork     string   `json:"artwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
 	SearchTerms []string `json:"searchTerms,omitempty"`
@@ -1128,13 +1130,14 @@ func normalizeTracks(items []responses.ResponseTrack) []Track {
 	for _, item := range items {
 		if item.GetPath() != "" {
 			trackIndex, _ := strconv.Atoi(item.Index)
-			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, ArtistID: item.GrandParentRatingKey, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, PartPath: item.GetPath(), Artwork: item.Image, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.GrandParentTitleSort, item.ParentTitleSort), DurationMS: item.Duration})
+			discIndex, _ := strconv.Atoi(item.ParentIndex)
+			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, ArtistID: item.GrandParentRatingKey, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, DiscIndex: discIndex, PartPath: item.GetPath(), Artwork: item.Image, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.GrandParentTitleSort, item.ParentTitleSort), DurationMS: item.Duration})
 		}
 	}
 	return tracks
 }
 func publicTrackFor(track Track) publicTrack {
-	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, ArtistID: track.ArtistID, Album: track.Album, AlbumID: track.AlbumID, Artwork: track.Artwork, BlurHash: track.BlurHash, SearchTerms: track.SearchTerms, DurationMS: track.DurationMS}
+	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, ArtistID: track.ArtistID, Album: track.Album, AlbumID: track.AlbumID, TrackIndex: track.TrackIndex, DiscIndex: track.DiscIndex, Artwork: track.Artwork, BlurHash: track.BlurHash, SearchTerms: track.SearchTerms, DurationMS: track.DurationMS}
 }
 func publicTracks(tracks []Track) []publicTrack {
 	result := make([]publicTrack, 0, len(tracks))

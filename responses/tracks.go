@@ -49,6 +49,8 @@ type ResponseTrack struct {
 	Media                ResponseTrackMedia `xml:"Media"`
 	//Track Number
 	Index string `xml:"index,attr"`
+	//Disc Number, used together with Index to preserve Plex's album order.
+	ParentIndex string `xml:"parentIndex,attr"`
 	// Duration in milliseconds, used by the web session scheduler.
 	Duration      int64  `xml:"duration,attr"`
 	Image         string `xml:"thumb,attr"`
