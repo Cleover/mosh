@@ -65,9 +65,10 @@ func TestSessionViewHidesInactiveMembers(t *testing.T) {
 	view := api.view(&Session{Members: map[string]Member{
 		"active": {ID: "active", Username: "Active", LastSeen: now},
 		"stale":  {ID: "stale", Username: "Stale", LastSeen: now.Add(-memberIdleTimeout - time.Second)},
+		"host":   {ID: "host", Username: "Host", Host: true, LastSeen: now.Add(-memberIdleTimeout - time.Second)},
 	}})
-	if len(view.Members) != 1 || view.Members[0].Username != "Active" {
-		t.Fatalf("expected only active listeners, got %#v", view.Members)
+	if len(view.Members) != 2 || view.Members[0].Username != "Host" || view.Members[1].Username != "Active" {
+		t.Fatalf("expected host plus active listeners, got %#v", view.Members)
 	}
 }
 

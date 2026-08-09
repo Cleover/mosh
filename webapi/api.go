@@ -1076,7 +1076,10 @@ func (a *API) view(session *Session) sessionView {
 		view.Current = &public
 	}
 	for _, member := range session.Members {
-		if memberIsActive(member, now) {
+		// The host is the room's enduring owner identity. Keep it in the room
+		// roster even if its short-lived browser heartbeat is unavailable, while
+		// ordinary listeners still disappear after the idle timeout.
+		if member.Host || memberIsActive(member, now) {
 			view.Members = append(view.Members, member)
 		}
 	}
