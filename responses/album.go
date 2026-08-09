@@ -10,12 +10,14 @@ type ResponseAlbumDirectory struct {
 	//example /library/metadata/33342/children
 	Key string `xml:"key,attr"`
 	//Album title
-	Title string `xml:"title,attr"`
+	Title     string `xml:"title,attr"`
+	TitleSort string `xml:"titleSort,attr"`
 	//This is like the artist's ID. We can use it to reverse engineer
 	//the key. This makes running commands easier
 	RatingKey string `xml:"ratingKey,attr"`
 	//Artist Name
-	ParentTitle string `xml:"parentTitle,attr"`
+	ParentTitle     string `xml:"parentTitle,attr"`
+	ParentTitleSort string `xml:"parentTitleSort,attr"`
 	//Album artwork, served through the web API's authenticated artwork proxy.
 	Thumb         string `xml:"thumb,attr"`
 	ThumbBlurHash string `xml:"thumbBlurHash,attr"`

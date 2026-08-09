@@ -119,3 +119,10 @@ func TestStoreMigratesLibraryPermissionOnlyOnce(t *testing.T) {
 		t.Fatal("an explicit library permission change was overwritten on reload")
 	}
 }
+
+func TestUniqueSearchTermsOmitsDuplicateAndEmptySortKeys(t *testing.T) {
+	terms := uniqueSearchTerms(" Romanized title ", "romanized title", "", "Romanized artist")
+	if len(terms) != 2 || terms[0] != "Romanized title" || terms[1] != "Romanized artist" {
+		t.Fatalf("unexpected search terms: %#v", terms)
+	}
+}

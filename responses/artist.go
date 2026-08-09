@@ -10,7 +10,8 @@ type ResponseArtistDirectory struct {
 	//example /library/metadata/100098/children
 	Key string `xml:"key,attr"`
 	//Artist title
-	Title string `xml:"title,attr"`
+	Title     string `xml:"title,attr"`
+	TitleSort string `xml:"titleSort,attr"`
 	//This is like the artist's ID. We can use it to reverse engineer
 	//the key. This makes running commands easier
 	RatingKey string `xml:"ratingKey,attr"`

@@ -11,16 +11,17 @@ import (
 )
 
 type Track struct {
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	Artist     string `json:"artist"`
-	Album      string `json:"album"`
-	AlbumID    string `json:"-"`
-	TrackIndex int    `json:"-"`
-	PartPath   string `json:"partPath"`
-	Artwork    string `json:"artwork,omitempty"`
-	BlurHash   string `json:"blurHash,omitempty"`
-	DurationMS int64  `json:"durationMs"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Artist      string   `json:"artist"`
+	Album       string   `json:"album"`
+	AlbumID     string   `json:"-"`
+	TrackIndex  int      `json:"-"`
+	PartPath    string   `json:"partPath"`
+	Artwork     string   `json:"artwork,omitempty"`
+	BlurHash    string   `json:"blurHash,omitempty"`
+	SearchTerms []string `json:"searchTerms,omitempty"`
+	DurationMS  int64    `json:"durationMs"`
 }
 
 type Permissions struct {

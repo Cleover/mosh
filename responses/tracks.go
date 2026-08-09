@@ -31,17 +31,20 @@ type ResponseTrack struct {
 	//key="/library/parts/77708/1574343480/file.mp3"
 	Key string `xml:"key,attr"`
 	//Album title
-	Title string `xml:"title,attr"`
+	Title     string `xml:"title,attr"`
+	TitleSort string `xml:"titleSort,attr"`
 	//This is like the artist's ID. We can use it to reverse engineer
 	//the key. This makes running commands easier
 	RatingKey string `xml:"ratingKey,attr"`
 	//Album Name
-	ParentTitle string `xml:"parentTitle,attr"`
+	ParentTitle     string `xml:"parentTitle,attr"`
+	ParentTitleSort string `xml:"parentTitleSort,attr"`
 	//The album rating key lets the web API resolve a cached album into tracks.
 	ParentRatingKey string `xml:"parentRatingKey,attr"`
 	//Album Name
-	GrandParentTitle string             `xml:"grandparentTitle,attr"`
-	Media            ResponseTrackMedia `xml:"Media"`
+	GrandParentTitle     string             `xml:"grandparentTitle,attr"`
+	GrandParentTitleSort string             `xml:"grandparentTitleSort,attr"`
+	Media                ResponseTrackMedia `xml:"Media"`
 	//Track Number
 	Index string `xml:"index,attr"`
 	// Duration in milliseconds, used by the web session scheduler.
