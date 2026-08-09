@@ -6,7 +6,16 @@ type ResponseTrackMediaPart struct {
 	XMLName xml.Name `xml:"Part"`
 	//This is what we actually play
 	///library/parts/77708/1574343480/file.mp3
-	Key string `xml:"key,attr"`
+	Key     string                     `xml:"key,attr"`
+	Streams []ResponseTrackMediaStream `xml:"Stream"`
+}
+
+// ResponseTrackMediaStream is deliberately minimal. The audio stream ID is
+// needed for Plex's loudness-level endpoint, while all other stream metadata
+// remains outside the web API's public model.
+type ResponseTrackMediaStream struct {
+	ID         string `xml:"id,attr"`
+	StreamType int    `xml:"streamType,attr"`
 }
 
 type ResponseTrackMedia struct {
@@ -44,9 +53,30 @@ func (r *ResponseTrack) GetPath() string {
 	return r.Media.Part.Key
 }
 
+func (r *ResponseTrack) AudioStreamID() string {
+	for _, stream := range r.Media.Part.Streams {
+		if stream.StreamType == 2 && stream.ID != "" {
+			return stream.ID
+		}
+	}
+	return ""
+}
+
 type ResponseTracksMediaContainer struct {
 	XMLName xml.Name        `xml:"MediaContainer"`
 	Tracks  []ResponseTrack `xml:"Track"`
+}
+
+// ResponseLoudnessLevelsMediaContainer is returned from
+// /library/streams/:id/levels. The `v` values are server-computed loudness
+// samples used by Plexamp's waveform-seeking UI.
+type ResponseLoudnessLevelsMediaContainer struct {
+	XMLName xml.Name                `xml:"MediaContainer"`
+	Levels  []ResponseLoudnessLevel `xml:"Level"`
+}
+
+type ResponseLoudnessLevel struct {
+	Value float64 `xml:"v,attr"`
 }
 
 /*

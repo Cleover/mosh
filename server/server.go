@@ -259,6 +259,34 @@ func (s *Server) GetTrack(trackID string) (responses.ResponseTrack, bool) {
 	return response.Tracks[0], true
 }
 
+// GetLoudnessLevels retrieves Plex's precomputed seekprint samples for one
+// track. It never reads or analyzes the media file; a missing loudness analysis
+// simply returns false so callers can retain a normal progress bar.
+func (s *Server) GetLoudnessLevels(trackID string) ([]float64, bool) {
+	track, found := s.GetTrack(trackID)
+	if !found {
+		return nil, false
+	}
+	streamID := track.AudioStreamID()
+	if streamID == "" {
+		return nil, false
+	}
+	url := s.PlexURLs.MakeURL("/library/streams/"+urlpkg.PathEscape(streamID)+"/levels") + "&subsample=128"
+	body, status := s.doGet(url)
+	if status != http.StatusOK {
+		return nil, false
+	}
+	var response responses.ResponseLoudnessLevelsMediaContainer
+	if err := xml.Unmarshal(body, &response); err != nil || len(response.Levels) == 0 {
+		return nil, false
+	}
+	levels := make([]float64, 0, len(response.Levels))
+	for _, level := range response.Levels {
+		levels = append(levels, level.Value)
+	}
+	return levels, true
+}
+
 func (s *Server) MakeURL(part string) string {
 	return s.PlexURLs.MakeURL(part)
 }

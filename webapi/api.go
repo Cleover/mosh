@@ -22,13 +22,14 @@ import (
 )
 
 type API struct {
-	config  AppConfig
-	store   *Store
-	plex    moshserver.Server
-	library *libraryCache
-	streams *StreamHub
-	limits  *rateLimiter
-	http    *http.Client
+	config    AppConfig
+	store     *Store
+	plex      moshserver.Server
+	library   *libraryCache
+	waveforms *waveformCache
+	streams   *StreamHub
+	limits    *rateLimiter
+	http      *http.Client
 }
 
 const memberIdleTimeout = 45 * time.Second
@@ -42,7 +43,7 @@ func New(config AppConfig) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	api := &API{config: config, store: store, plex: moshserver.GetServer(&plexConfig), library: newLibraryCache(), streams: NewStreamHub(config.FFmpegPath, config.Bitrate), limits: newRateLimiter(), http: &http.Client{Timeout: 15 * time.Second}}
+	api := &API{config: config, store: store, plex: moshserver.GetServer(&plexConfig), library: newLibraryCache(), waveforms: newWaveformCache(), streams: NewStreamHub(config.FFmpegPath, config.Bitrate), limits: newRateLimiter(), http: &http.Client{Timeout: 15 * time.Second}}
 	if _, err := api.refreshLibrary(); err != nil {
 		log.Printf("initial Plex library cache load failed: %v", err)
 	}
@@ -356,6 +357,10 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "library" && r.Method == http.MethodGet {
 		a.sessionLibrary(w, r, member)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "waveform" && r.Method == http.MethodGet {
+		a.waveform(w, r, session)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "queue" && parts[2] == "add" && r.Method == http.MethodPost {

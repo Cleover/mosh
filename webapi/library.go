@@ -123,6 +123,9 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	cache.refreshedAt = refreshedAt
 	cache.ready = true
 	cache.mu.Unlock()
+	if a.waveforms != nil {
+		a.waveforms.reset()
+	}
 
 	return status, nil
 }
