@@ -15,7 +15,8 @@ type ResponseArtistDirectory struct {
 	//the key. This makes running commands easier
 	RatingKey string `xml:"ratingKey,attr"`
 	//Artist artwork, served through the web API's authenticated artwork proxy.
-	Thumb string `xml:"thumb,attr"`
+	Thumb         string `xml:"thumb,attr"`
+	ThumbBlurHash string `xml:"thumbBlurHash,attr"`
 }
 
 type ResponseArtistMediaContainer struct {

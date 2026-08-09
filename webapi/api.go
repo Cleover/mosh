@@ -980,20 +980,23 @@ type publicTrack struct {
 	Artist     string `json:"artist"`
 	Album      string `json:"album"`
 	Artwork    string `json:"artwork,omitempty"`
+	BlurHash   string `json:"blurHash,omitempty"`
 	DurationMS int64  `json:"durationMs"`
 }
 
 type publicArtist struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Artwork string `json:"artwork,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Artwork  string `json:"artwork,omitempty"`
+	BlurHash string `json:"blurHash,omitempty"`
 }
 
 type publicAlbum struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Artist  string `json:"artist"`
-	Artwork string `json:"artwork,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Artist   string `json:"artist"`
+	Artwork  string `json:"artwork,omitempty"`
+	BlurHash string `json:"blurHash,omitempty"`
 }
 type sessionView struct {
 	ID            string        `json:"id"`
@@ -1093,13 +1096,13 @@ func normalizeTracks(items []responses.ResponseTrack) []Track {
 	for _, item := range items {
 		if item.GetPath() != "" {
 			trackIndex, _ := strconv.Atoi(item.Index)
-			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, PartPath: item.GetPath(), Artwork: item.Image, DurationMS: item.Duration})
+			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, PartPath: item.GetPath(), Artwork: item.Image, BlurHash: item.ThumbBlurHash, DurationMS: item.Duration})
 		}
 	}
 	return tracks
 }
 func publicTrackFor(track Track) publicTrack {
-	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, Album: track.Album, Artwork: track.Artwork, DurationMS: track.DurationMS}
+	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, Album: track.Album, Artwork: track.Artwork, BlurHash: track.BlurHash, DurationMS: track.DurationMS}
 }
 func publicTracks(tracks []Track) []publicTrack {
 	result := make([]publicTrack, 0, len(tracks))
@@ -1112,7 +1115,7 @@ func publicTracks(tracks []Track) []publicTrack {
 func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 	result := make([]publicArtist, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicArtist{ID: item.RatingKey, Title: item.Title, Artwork: item.Thumb})
+		result = append(result, publicArtist{ID: item.RatingKey, Title: item.Title, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash})
 	}
 	return result
 }
@@ -1120,7 +1123,7 @@ func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 func publicAlbums(items []responses.ResponseAlbumDirectory) []publicAlbum {
 	result := make([]publicAlbum, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, Artwork: item.Thumb})
+		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash})
 	}
 	return result
 }

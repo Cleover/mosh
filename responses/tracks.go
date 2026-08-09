@@ -45,8 +45,9 @@ type ResponseTrack struct {
 	//Track Number
 	Index string `xml:"index,attr"`
 	// Duration in milliseconds, used by the web session scheduler.
-	Duration int64  `xml:"duration,attr"`
-	Image    string `xml:"thumb,attr"`
+	Duration      int64  `xml:"duration,attr"`
+	Image         string `xml:"thumb,attr"`
+	ThumbBlurHash string `xml:"thumbBlurHash,attr"`
 }
 
 func (r *ResponseTrack) GetPath() string {

@@ -19,6 +19,7 @@ type Track struct {
 	TrackIndex int    `json:"-"`
 	PartPath   string `json:"partPath"`
 	Artwork    string `json:"artwork,omitempty"`
+	BlurHash   string `json:"blurHash,omitempty"`
 	DurationMS int64  `json:"durationMs"`
 }
 

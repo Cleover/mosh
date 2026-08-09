@@ -17,7 +17,8 @@ type ResponseAlbumDirectory struct {
 	//Artist Name
 	ParentTitle string `xml:"parentTitle,attr"`
 	//Album artwork, served through the web API's authenticated artwork proxy.
-	Thumb string `xml:"thumb,attr"`
+	Thumb         string `xml:"thumb,attr"`
+	ThumbBlurHash string `xml:"thumbBlurHash,attr"`
 }
 
 type ResponseAlbumMediaContainer struct {

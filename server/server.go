@@ -212,7 +212,10 @@ func (s *Server) GetAllTracks() ([]responses.ResponseTrack, error) {
 }
 
 func (s *Server) libraryAllURL(itemType, start int) string {
-	return s.PlexURLs.Server() + "/library/sections/" + s.Config.Library + "/all?type=" + strconv.Itoa(itemType) + "&X-Plex-Container-Start=" + strconv.Itoa(start) + "&X-Plex-Container-Size=" + strconv.Itoa(libraryPageSize) + "&X-Plex-Token=" + s.Config.Token
+	// Blur hashes arrive alongside the ordinary library metadata. Asking Plex
+	// for the optional field here keeps the cache refresh to the same paged
+	// requests instead of making the browser fetch artwork placeholders later.
+	return s.PlexURLs.Server() + "/library/sections/" + s.Config.Library + "/all?type=" + strconv.Itoa(itemType) + "&X-Plex-Container-Start=" + strconv.Itoa(start) + "&X-Plex-Container-Size=" + strconv.Itoa(libraryPageSize) + "&includeFields=thumbBlurHash,artBlurHash&X-Plex-Token=" + s.Config.Token
 }
 
 func (s *Server) GetAlbumsForArtist(artistID string) []responses.ResponseAlbumDirectory {
