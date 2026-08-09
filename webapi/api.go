@@ -1028,7 +1028,7 @@ type adminSessionView struct {
 
 func (a *API) view(session *Session) sessionView {
 	now := time.Now()
-	view := sessionView{ID: session.ID, Name: session.Name, IsPublic: session.IsPublic, Queue: publicTracks(session.Queue), CurrentIndex: session.CurrentIndex, IsPlaying: session.IsPlaying, PositionMS: session.position(now), StreamVersion: session.StreamVersion, CreatedAt: session.CreatedAt}
+	view := sessionView{ID: session.ID, Name: session.Name, IsPublic: session.IsPublic, Queue: publicTracks(session.Queue), CurrentIndex: session.CurrentIndex, IsPlaying: session.IsPlaying, PositionMS: session.position(now), StreamVersion: session.StreamVersion, Members: make([]Member, 0), CreatedAt: session.CreatedAt}
 	if current, ok := session.current(); ok {
 		public := publicTrackFor(current)
 		view.Current = &public

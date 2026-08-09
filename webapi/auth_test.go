@@ -58,6 +58,17 @@ func TestHandlerRoutesDoNotDependOnMethodQualifiedMuxPatterns(t *testing.T) {
 	}
 }
 
+func TestRoomViewUsesEmptyMemberArray(t *testing.T) {
+	view := (&API{}).view(&Session{ID: "room", Name: "Room", CurrentIndex: -1})
+	payload, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"members":[]`) {
+		t.Fatalf("empty members should serialize as an array, got %s", payload)
+	}
+}
+
 func TestAdminCanCloseSession(t *testing.T) {
 	api := &API{
 		config:  AppConfig{InternalAPISecret: "internal-secret", SigningSecret: "01234567890123456789012345678901"},
