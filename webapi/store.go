@@ -25,6 +25,7 @@ type Track struct {
 type Permissions struct {
 	CanControl bool `json:"canControl"`
 	CanQueue   bool `json:"canQueue"`
+	CanLibrary bool `json:"canLibrary"`
 }
 
 type Member struct {
@@ -36,19 +37,23 @@ type Member struct {
 }
 
 type Session struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	IsPublic      bool              `json:"isPublic"`
-	PasswordHash  string            `json:"passwordHash"`
-	ShareSecret   string            `json:"shareSecret"`
-	Queue         []Track           `json:"queue"`
-	CurrentIndex  int               `json:"currentIndex"`
-	IsPlaying     bool              `json:"isPlaying"`
-	PositionMS    int64             `json:"positionMs"`
-	PositionAt    time.Time         `json:"-"`
-	StreamVersion int64             `json:"streamVersion"`
-	Members       map[string]Member `json:"members"`
-	CreatedAt     time.Time         `json:"createdAt"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IsPublic bool   `json:"isPublic"`
+	// PermissionsVersion is persisted solely to distinguish rooms created
+	// before a permission was introduced from rooms where it was deliberately
+	// disabled. It is intentionally not included in the public session view.
+	PermissionsVersion int               `json:"permissionsVersion,omitempty"`
+	PasswordHash       string            `json:"passwordHash"`
+	ShareSecret        string            `json:"shareSecret"`
+	Queue              []Track           `json:"queue"`
+	CurrentIndex       int               `json:"currentIndex"`
+	IsPlaying          bool              `json:"isPlaying"`
+	PositionMS         int64             `json:"positionMs"`
+	PositionAt         time.Time         `json:"-"`
+	StreamVersion      int64             `json:"streamVersion"`
+	Members            map[string]Member `json:"members"`
+	CreatedAt          time.Time         `json:"createdAt"`
 }
 
 type persistedState struct {
@@ -99,13 +104,30 @@ func NewStore(path string) (*Store, error) {
 	if persisted.Sessions != nil {
 		s.sessions = persisted.Sessions
 	}
+	permissionsMigrated := false
 	for _, session := range s.sessions {
 		if session.Members == nil {
 			session.Members = map[string]Member{}
 		}
+		if session.PermissionsVersion < 1 {
+			// Library browsing was available to every member before it became an
+			// explicit permission. Preserve that behavior once for saved rooms,
+			// without overwriting a later deliberate permission change.
+			for memberID, member := range session.Members {
+				member.Permissions.CanLibrary = true
+				session.Members[memberID] = member
+			}
+			session.PermissionsVersion = 1
+			permissionsMigrated = true
+		}
 		// Never resume audio automatically after a backend restart.
 		session.IsPlaying = false
 		session.PositionAt = time.Now()
+	}
+	if permissionsMigrated {
+		if err := s.saveLocked(); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }

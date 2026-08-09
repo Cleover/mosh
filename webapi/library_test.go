@@ -1,6 +1,10 @@
 package webapi
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 	cache := newLibraryCache()
@@ -34,5 +38,23 @@ func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 	albumTracks[0].Title = "changed"
 	if cache.tracksByAlbum["album-1"][0].Title == "changed" {
 		t.Fatal("tracksForAlbum returned a mutable cache slice")
+	}
+}
+
+func TestSessionLibraryRequiresLibraryPermission(t *testing.T) {
+	api := &API{library: newLibraryCache()}
+	api.library.ready = true
+
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions/room/library?kind=albums", nil)
+	denied := httptest.NewRecorder()
+	api.sessionLibrary(denied, request, Member{ID: "guest"})
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("library without permission returned %d; want %d", denied.Code, http.StatusForbidden)
+	}
+
+	allowed := httptest.NewRecorder()
+	api.sessionLibrary(allowed, request, Member{ID: "guest", Permissions: Permissions{CanLibrary: true}})
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("library with permission returned %d; want %d", allowed.Code, http.StatusOK)
 	}
 }

@@ -244,7 +244,7 @@ func (a *API) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if input.Password != "" {
 		session.PasswordHash = hashPassword(input.Password)
 	}
-	host := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Host: true, Permissions: Permissions{CanControl: true, CanQueue: true}, LastSeen: now}
+	host := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Host: true, Permissions: Permissions{CanControl: true, CanQueue: true, CanLibrary: true}, LastSeen: now}
 	session.Members[host.ID] = host
 	a.store.mu.Lock()
 	a.store.sessions[session.ID] = session
@@ -339,7 +339,7 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			// The admin secret is an out-of-band owner credential. It may manage
 			// any session without being represented as a guest member.
-			member = Member{ID: "admin", Username: "Admin", Host: true, Permissions: Permissions{CanControl: true, CanQueue: true}}
+			member = Member{ID: "admin", Username: "Admin", Host: true, Permissions: Permissions{CanControl: true, CanQueue: true, CanLibrary: true}}
 		}
 	}
 	if !ok {
@@ -355,7 +355,7 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "library" && r.Method == http.MethodGet {
-		a.sessionLibrary(w, r)
+		a.sessionLibrary(w, r, member)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "queue" && parts[2] == "add" && r.Method == http.MethodPost {
@@ -428,7 +428,7 @@ func (a *API) join(w http.ResponseWriter, r *http.Request, sessionID string) {
 			return
 		}
 	}
-	member := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Permissions: Permissions{}, LastSeen: time.Now()}
+	member := Member{ID: id("member"), Username: strings.TrimSpace(input.Username), Permissions: Permissions{CanLibrary: true}, LastSeen: time.Now()}
 	session.Members[member.ID] = member
 	err := a.store.saveLocked()
 	a.store.mu.Unlock()

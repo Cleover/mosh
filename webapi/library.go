@@ -127,7 +127,11 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	return status, nil
 }
 
-func (a *API) sessionLibrary(w http.ResponseWriter, r *http.Request) {
+func (a *API) sessionLibrary(w http.ResponseWriter, r *http.Request, member Member) {
+	if !member.Host && !member.Permissions.CanLibrary {
+		respondError(w, http.StatusForbidden, "library permission required")
+		return
+	}
 	if a.library == nil {
 		respondError(w, http.StatusServiceUnavailable, "library cache is not ready")
 		return

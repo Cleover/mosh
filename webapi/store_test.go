@@ -2,6 +2,8 @@ package webapi
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -78,5 +80,42 @@ func TestSessionPositionAdvancesOnlyWhilePlaying(t *testing.T) {
 	session.IsPlaying = false
 	if got := session.position(now); got != 1000 {
 		t.Fatalf("unexpected paused position: %d", got)
+	}
+}
+
+func TestStoreMigratesLibraryPermissionOnlyOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	legacy, err := json.Marshal(persistedState{Sessions: map[string]*Session{
+		"room": {ID: "room", Members: map[string]Member{"guest": {ID: "guest", Username: "Guest"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.sessions["room"].Members["guest"].Permissions.CanLibrary || store.sessions["room"].PermissionsVersion != 1 {
+		t.Fatal("legacy member did not receive the library browsing default")
+	}
+
+	room := store.sessions["room"]
+	guest := room.Members["guest"]
+	guest.Permissions.CanLibrary = false
+	room.Members["guest"] = guest
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.sessions["room"].Members["guest"].Permissions.CanLibrary {
+		t.Fatal("an explicit library permission change was overwritten on reload")
 	}
 }
