@@ -836,23 +836,32 @@ func (a *API) startStream(sessionID string, track Track, position int64) error {
 	if track.PartPath == "" {
 		return errors.New("track has no Plex media path")
 	}
-	if err := a.streams.Start(sessionID, track, a.plex.MakeURL(track.PartPath), position); err != nil {
-		return err
-	}
 	a.store.mu.RLock()
 	session := a.store.sessions[sessionID]
 	version := int64(0)
-	shouldSchedule := false
 	if session != nil {
 		current, ok := session.current()
-		shouldSchedule = ok && session.IsPlaying && current.ID == track.ID
+		if !ok || !session.IsPlaying || current.ID != track.ID {
+			a.store.mu.RUnlock()
+			return errors.New("stream track is no longer current")
+		}
 		version = session.StreamVersion
 	}
 	a.store.mu.RUnlock()
-	if shouldSchedule && track.DurationMS > position {
-		go a.advanceAtEnd(sessionID, track.ID, version, track.DurationMS-position)
+	if session == nil {
+		return errors.New("session not found")
 	}
-	return nil
+	return a.streams.Start(sessionID, streamTrack{Track: track, SourceURL: a.plex.MakeURL(track.PartPath), StartMS: position}, streamCallbacks{
+		Peek: func(finishedTrackID string) (streamTrack, bool) {
+			return a.peekStreamNext(sessionID, finishedTrackID, version)
+		},
+		Advance: func(finishedTrackID string) (streamTrack, bool) {
+			return a.advanceStreamNext(sessionID, finishedTrackID, version)
+		},
+		Failure: func(_ string) {
+			a.pauseForStreamFailure(sessionID, version)
+		},
+	})
 }
 
 func (a *API) pauseForStreamFailure(sessionID string, expectedVersion int64) {
@@ -874,31 +883,46 @@ func (a *API) pauseForStreamFailure(sessionID string, expectedVersion int64) {
 	a.streams.Stop(sessionID)
 }
 
-// advanceAtEnd owns normal end-of-track progression for a single shared
-// session. Each start/seek bumps StreamVersion, so stale timers can never
-// advance a track after a new control action.
-func (a *API) advanceAtEnd(sessionID, trackID string, version, remainingMS int64) {
-	timer := time.NewTimer(time.Duration(remainingMS) * time.Millisecond)
-	defer timer.Stop()
-	<-timer.C
+// peekStreamNext is intentionally read-only: it lets the stream runner start
+// probing the next Plex file before it becomes audible, while queue edits are
+// still free to replace that candidate.
+func (a *API) peekStreamNext(sessionID, trackID string, version int64) (streamTrack, bool) {
+	a.store.mu.RLock()
+	defer a.store.mu.RUnlock()
+	session := a.store.sessions[sessionID]
+	if session == nil || !session.IsPlaying || session.StreamVersion != version {
+		return streamTrack{}, false
+	}
+	current, ok := session.current()
+	if !ok || current.ID != trackID || session.CurrentIndex+1 >= len(session.Queue) {
+		return streamTrack{}, false
+	}
+	next := session.Queue[session.CurrentIndex+1]
+	if next.PartPath == "" {
+		return streamTrack{}, false
+	}
+	return streamTrack{Track: next, SourceURL: a.plex.MakeURL(next.PartPath)}, true
+}
 
+// advanceStreamNext moves the public room state at the exact decoder boundary.
+// Unlike the old duration timer it deliberately leaves StreamVersion unchanged
+// between ordinary tracks, so browsers keep one buffered audio connection.
+func (a *API) advanceStreamNext(sessionID, trackID string, version int64) (streamTrack, bool) {
 	a.store.mu.Lock()
 	session := a.store.sessions[sessionID]
 	if session == nil || !session.IsPlaying || session.StreamVersion != version {
 		a.store.mu.Unlock()
-		return
+		return streamTrack{}, false
 	}
 	current, ok := session.current()
 	if !ok || current.ID != trackID {
 		a.store.mu.Unlock()
-		return
+		return streamTrack{}, false
 	}
 	now := time.Now()
 	nextIndex := session.CurrentIndex + 1
 	if nextIndex >= len(session.Queue) {
 		// A completed room has no now-playing track and no remaining queue.
-		// Clearing both avoids a stale final track in clients and lets the next
-		// queued item start as a fresh shared stream.
 		session.Queue = nil
 		session.CurrentIndex = -1
 		session.IsPlaying = false
@@ -907,25 +931,26 @@ func (a *API) advanceAtEnd(sessionID, trackID string, version, remainingMS int64
 		session.StreamVersion++
 		err := a.store.saveLocked()
 		a.store.mu.Unlock()
-		if err == nil {
-			a.streams.Stop(sessionID)
+		if err != nil {
+			log.Printf("could not persist completed shared session %s: %v", sessionID, err)
 		}
-		return
+		return streamTrack{}, false
+	}
+	next := session.Queue[nextIndex]
+	if next.PartPath == "" {
+		a.store.mu.Unlock()
+		return streamTrack{}, false
 	}
 	session.CurrentIndex = nextIndex
 	session.PositionMS = 0
 	session.PositionAt = now
-	session.StreamVersion++
-	nextVersion := session.StreamVersion
-	next, _ := session.current()
 	err := a.store.saveLocked()
 	a.store.mu.Unlock()
-	if err == nil {
-		if err := a.startStream(sessionID, next, 0); err != nil {
-			log.Printf("could not advance shared session %s: %v", sessionID, err)
-			a.pauseForStreamFailure(sessionID, nextVersion)
-		}
+	if err != nil {
+		log.Printf("could not persist next shared track for %s: %v", sessionID, err)
+		return streamTrack{}, false
 	}
+	return streamTrack{Track: next, SourceURL: a.plex.MakeURL(next.PartPath)}, true
 }
 
 func (a *API) permissions(w http.ResponseWriter, r *http.Request, session *Session, member Member, targetID string) {

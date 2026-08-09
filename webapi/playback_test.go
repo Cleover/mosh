@@ -19,7 +19,9 @@ func TestQueueEndClearsPlaybackAndQueue(t *testing.T) {
 	}}
 	api := &API{store: store, streams: NewStreamHub("unused", "320k")}
 
-	api.advanceAtEnd("room", "last", 4, 0)
+	if _, advanced := api.advanceStreamNext("room", "last", 4); advanced {
+		t.Fatal("final track unexpectedly advanced")
+	}
 
 	session, ok := store.snapshot("room")
 	if !ok {
