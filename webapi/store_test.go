@@ -83,6 +83,25 @@ func TestSessionPositionAdvancesOnlyWhilePlaying(t *testing.T) {
 	}
 }
 
+func TestAdminMemberKeepsStoredHostVisible(t *testing.T) {
+	api := &API{store: &Store{sessions: map[string]*Session{
+		"room": {
+			ID: "room",
+			Members: map[string]Member{
+				"host": {ID: "host", Username: "Host", Host: true, LastSeen: time.Now().Add(-memberIdleTimeout - time.Second)},
+			},
+		},
+	}}}
+	admin, session, ok := api.adminMember("room")
+	if !ok || !admin.Host || admin.ID != "admin" {
+		t.Fatalf("expected owner credential, got %#v (ok=%v)", admin, ok)
+	}
+	view := api.view(session)
+	if len(view.Members) != 1 || view.Members[0].ID != "host" {
+		t.Fatalf("expected refreshed host in room view, got %#v", view.Members)
+	}
+}
+
 func TestStoreMigratesLibraryPermissionOnlyOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	legacy, err := json.Marshal(persistedState{Sessions: map[string]*Session{

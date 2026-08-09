@@ -336,12 +336,7 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	member, session, ok := a.member(r, sessionID)
 	if !ok && a.admin(r) {
-		session, ok = a.store.snapshot(sessionID)
-		if ok {
-			// The admin secret is an out-of-band owner credential. It may manage
-			// any session without being represented as a guest member.
-			member = Member{ID: "admin", Username: "Admin", Host: true, Permissions: Permissions{CanControl: true, CanQueue: true, CanLibrary: true}}
-		}
+		member, session, ok = a.adminMember(sessionID)
 	}
 	if !ok {
 		respondError(w, http.StatusUnauthorized, "session membership required")
@@ -465,6 +460,32 @@ func (a *API) member(r *http.Request, sessionID string) (Member, *Session, bool)
 	copy := cloneSession(session)
 	a.store.mu.Unlock()
 	return member, copy, exists
+}
+
+// adminMember handles the owner credential's room access. Admin users are not
+// necessarily carrying a room-member cookie (for example after their room
+// cookie has expired), but their active room page should still count the real
+// host as present. Keep that stored host's in-memory heartbeat current; it is
+// deliberately not persisted and therefore still expires shortly after the
+// owner stops visiting the room.
+func (a *API) adminMember(sessionID string) (Member, *Session, bool) {
+	a.store.mu.Lock()
+	session := a.store.sessions[sessionID]
+	if session == nil {
+		a.store.mu.Unlock()
+		return Member{}, nil, false
+	}
+	now := time.Now()
+	for memberID, candidate := range session.Members {
+		if candidate.Host {
+			candidate.LastSeen = now
+			session.Members[memberID] = candidate
+			break
+		}
+	}
+	copy := cloneSession(session)
+	a.store.mu.Unlock()
+	return Member{ID: "admin", Username: "Admin", Host: true, Permissions: Permissions{CanControl: true, CanQueue: true, CanLibrary: true}}, copy, true
 }
 
 func (a *API) addQueue(w http.ResponseWriter, r *http.Request, session *Session, member Member) {
