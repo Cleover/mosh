@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ type API struct {
 	config  AppConfig
 	store   *Store
 	plex    moshserver.Server
+	library *libraryCache
 	streams *StreamHub
 	limits  *rateLimiter
 	http    *http.Client
@@ -40,7 +42,11 @@ func New(config AppConfig) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &API{config: config, store: store, plex: moshserver.GetServer(&plexConfig), streams: NewStreamHub(config.FFmpegPath, config.Bitrate), limits: newRateLimiter(), http: &http.Client{Timeout: 15 * time.Second}}, nil
+	api := &API{config: config, store: store, plex: moshserver.GetServer(&plexConfig), library: newLibraryCache(), streams: NewStreamHub(config.FFmpegPath, config.Bitrate), limits: newRateLimiter(), http: &http.Client{Timeout: 15 * time.Second}}
+	if _, err := api.refreshLibrary(); err != nil {
+		log.Printf("initial Plex library cache load failed: %v", err)
+	}
+	return api, nil
 }
 
 func (a *API) Handler() http.Handler {
@@ -54,6 +60,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/admin/library/artists", requireMethod(http.MethodGet, a.handleArtists))
 	mux.HandleFunc("/api/admin/library/albums", requireMethod(http.MethodGet, a.handleAlbums))
 	mux.HandleFunc("/api/admin/library/tracks", requireMethod(http.MethodGet, a.handleTracks))
+	mux.HandleFunc("/api/admin/library/refresh", requireMethod(http.MethodPost, a.handleRefreshLibrary))
 	mux.HandleFunc("/api/admin/sessions", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -132,8 +139,12 @@ func (a *API) handleArtists(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := a.plex.SearchArtists(search)
-	respond(w, http.StatusOK, map[string]any{"artists": publicArtists(items)})
+	items, ready := a.library.searchArtists(search)
+	if !ready {
+		respondError(w, http.StatusServiceUnavailable, "library cache is not ready")
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"artists": items})
 }
 
 func (a *API) handleAlbums(w http.ResponseWriter, r *http.Request) {
@@ -144,8 +155,12 @@ func (a *API) handleAlbums(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := a.plex.SearchAlbums(search)
-	respond(w, http.StatusOK, map[string]any{"albums": publicAlbums(items)})
+	items, ready := a.library.searchAlbums(search)
+	if !ready {
+		respondError(w, http.StatusServiceUnavailable, "library cache is not ready")
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"albums": items})
 }
 
 func (a *API) handleTracks(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +171,28 @@ func (a *API) handleTracks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := a.plex.SearchTracks(search)
-	respond(w, http.StatusOK, map[string]any{"tracks": publicTracks(normalizeTracks(items))})
+	items, ready := a.library.searchTracks(search)
+	if !ready {
+		respondError(w, http.StatusServiceUnavailable, "library cache is not ready")
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{"tracks": publicTracks(items)})
+}
+
+func (a *API) handleRefreshLibrary(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	status, err := a.refreshLibrary()
+	if err != nil {
+		if errors.Is(err, errLibraryRefreshInProgress) {
+			respondError(w, http.StatusConflict, err.Error())
+			return
+		}
+		respondError(w, http.StatusBadGateway, "could not refresh Plex library cache")
+		return
+	}
+	respond(w, http.StatusOK, status)
 }
 
 func (a *API) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -296,6 +331,10 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		a.stream(w, r, session, member)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "library" && r.Method == http.MethodGet {
+		a.sessionLibrary(w, r)
+		return
+	}
 	if len(parts) == 3 && parts[1] == "queue" && parts[2] == "add" && r.Method == http.MethodPost {
 		a.addQueue(w, r, session, member)
 		return
@@ -415,9 +454,9 @@ func (a *API) addQueue(w http.ResponseWriter, r *http.Request, session *Session,
 	}
 	var tracks []Track
 	if input.AlbumID != "" {
-		tracks = normalizeTracks(a.plex.GetSongsForAlbum(input.AlbumID))
-	} else if track, found := a.plex.GetTrack(input.TrackID); found {
-		tracks = normalizeTracks([]responses.ResponseTrack{track})
+		tracks, _ = a.library.tracksForAlbum(input.AlbumID)
+	} else if track, found := a.library.track(input.TrackID); found {
+		tracks = []Track{track}
 	}
 	if len(tracks) == 0 {
 		respondError(w, http.StatusNotFound, "no playable tracks found")
@@ -917,14 +956,16 @@ type publicTrack struct {
 }
 
 type publicArtist struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Artwork string `json:"artwork,omitempty"`
 }
 
 type publicAlbum struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Artist string `json:"artist"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Artist  string `json:"artist"`
+	Artwork string `json:"artwork,omitempty"`
 }
 type sessionView struct {
 	ID            string        `json:"id"`
@@ -1023,7 +1064,8 @@ func normalizeTracks(items []responses.ResponseTrack) []Track {
 	tracks := make([]Track, 0, len(items))
 	for _, item := range items {
 		if item.GetPath() != "" {
-			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, Album: item.ParentTitle, PartPath: item.GetPath(), Artwork: item.Image, DurationMS: item.Duration})
+			trackIndex, _ := strconv.Atoi(item.Index)
+			tracks = append(tracks, Track{ID: item.RatingKey, Title: item.Title, Artist: item.GrandParentTitle, Album: item.ParentTitle, AlbumID: item.ParentRatingKey, TrackIndex: trackIndex, PartPath: item.GetPath(), Artwork: item.Image, DurationMS: item.Duration})
 		}
 	}
 	return tracks
@@ -1042,7 +1084,7 @@ func publicTracks(tracks []Track) []publicTrack {
 func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 	result := make([]publicArtist, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicArtist{ID: item.RatingKey, Title: item.Title})
+		result = append(result, publicArtist{ID: item.RatingKey, Title: item.Title, Artwork: item.Thumb})
 	}
 	return result
 }
@@ -1050,7 +1092,7 @@ func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 func publicAlbums(items []responses.ResponseAlbumDirectory) []publicAlbum {
 	result := make([]publicAlbum, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle})
+		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, Artwork: item.Thumb})
 	}
 	return result
 }

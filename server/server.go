@@ -4,15 +4,19 @@ package server
 
 import (
 	"encoding/xml"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	urlpkg "net/url"
+	"strconv"
 	"time"
 
 	configpkg "github.com/adamrdrew/mosh/config"
 	"github.com/adamrdrew/mosh/plex_urls"
 	"github.com/adamrdrew/mosh/responses"
 )
+
+const libraryPageSize = 1000
 
 func GetServer(config *configpkg.Config) Server {
 	server := Server{
@@ -142,6 +146,73 @@ func (s *Server) SearchTracks(trackName string) []responses.ResponseTrack {
 		return []responses.ResponseTrack{}
 	}
 	return response.Tracks
+}
+
+// GetAllArtists, GetAllAlbums, and GetAllTracks load each collection in
+// bounded Plex pages. The web API keeps the result in its own cache, so this
+// work happens at startup or an explicit refresh instead of during browsing.
+func (s *Server) GetAllArtists() ([]responses.ResponseArtistDirectory, error) {
+	items := make([]responses.ResponseArtistDirectory, 0)
+	for start := 0; ; {
+		url := s.libraryAllURL(8, start)
+		body, status := s.doGet(url)
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("Plex artist library request returned %d", status)
+		}
+		var response responses.ResponseArtistMediaContainer
+		if err := xml.Unmarshal(body, &response); err != nil {
+			return nil, err
+		}
+		items = append(items, response.Directories...)
+		if len(response.Directories) < libraryPageSize {
+			return items, nil
+		}
+		start += len(response.Directories)
+	}
+}
+
+func (s *Server) GetAllAlbums() ([]responses.ResponseAlbumDirectory, error) {
+	items := make([]responses.ResponseAlbumDirectory, 0)
+	for start := 0; ; {
+		url := s.libraryAllURL(9, start)
+		body, status := s.doGet(url)
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("Plex album library request returned %d", status)
+		}
+		var response responses.ResponseAlbumMediaContainer
+		if err := xml.Unmarshal(body, &response); err != nil {
+			return nil, err
+		}
+		items = append(items, response.Directories...)
+		if len(response.Directories) < libraryPageSize {
+			return items, nil
+		}
+		start += len(response.Directories)
+	}
+}
+
+func (s *Server) GetAllTracks() ([]responses.ResponseTrack, error) {
+	items := make([]responses.ResponseTrack, 0)
+	for start := 0; ; {
+		url := s.libraryAllURL(10, start)
+		body, status := s.doGet(url)
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("Plex track library request returned %d", status)
+		}
+		var response responses.ResponseTracksMediaContainer
+		if err := xml.Unmarshal(body, &response); err != nil {
+			return nil, err
+		}
+		items = append(items, response.Tracks...)
+		if len(response.Tracks) < libraryPageSize {
+			return items, nil
+		}
+		start += len(response.Tracks)
+	}
+}
+
+func (s *Server) libraryAllURL(itemType, start int) string {
+	return s.PlexURLs.Server() + "/library/sections/" + s.Config.Library + "/all?type=" + strconv.Itoa(itemType) + "&X-Plex-Container-Start=" + strconv.Itoa(start) + "&X-Plex-Container-Size=" + strconv.Itoa(libraryPageSize) + "&X-Plex-Token=" + s.Config.Token
 }
 
 func (s *Server) GetAlbumsForArtist(artistID string) []responses.ResponseAlbumDirectory {

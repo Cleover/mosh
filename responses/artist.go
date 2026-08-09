@@ -14,6 +14,8 @@ type ResponseArtistDirectory struct {
 	//This is like the artist's ID. We can use it to reverse engineer
 	//the key. This makes running commands easier
 	RatingKey string `xml:"ratingKey,attr"`
+	//Artist artwork, served through the web API's authenticated artwork proxy.
+	Thumb string `xml:"thumb,attr"`
 }
 
 type ResponseArtistMediaContainer struct {

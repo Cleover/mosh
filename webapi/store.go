@@ -15,6 +15,8 @@ type Track struct {
 	Title      string `json:"title"`
 	Artist     string `json:"artist"`
 	Album      string `json:"album"`
+	AlbumID    string `json:"-"`
+	TrackIndex int    `json:"-"`
 	PartPath   string `json:"partPath"`
 	Artwork    string `json:"artwork,omitempty"`
 	DurationMS int64  `json:"durationMs"`

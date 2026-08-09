@@ -28,6 +28,8 @@ type ResponseTrack struct {
 	RatingKey string `xml:"ratingKey,attr"`
 	//Album Name
 	ParentTitle string `xml:"parentTitle,attr"`
+	//The album rating key lets the web API resolve a cached album into tracks.
+	ParentRatingKey string `xml:"parentRatingKey,attr"`
 	//Album Name
 	GrandParentTitle string             `xml:"grandparentTitle,attr"`
 	Media            ResponseTrackMedia `xml:"Media"`
