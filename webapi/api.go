@@ -34,6 +34,7 @@ type API struct {
 
 const memberIdleTimeout = 45 * time.Second
 const shuffleQueueSize = 10
+const maxArtworkBytes int64 = 10 << 20
 
 func New(config AppConfig) (*API, error) {
 	plexConfig := moshconfig.GetConfig()
@@ -44,7 +45,12 @@ func New(config AppConfig) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	api := &API{config: config, store: store, plex: moshserver.GetServer(&plexConfig), library: newLibraryCache(), waveforms: newWaveformCache(), streams: NewStreamHub(config.FFmpegPath, config.Bitrate), limits: newRateLimiter(), http: &http.Client{Timeout: 15 * time.Second}}
+	api := &API{config: config, store: store, plex: moshserver.GetServer(&plexConfig), library: newLibraryCache(), waveforms: newWaveformCache(), streams: NewStreamHub(config.FFmpegPath, config.Bitrate), limits: newRateLimiter(), http: &http.Client{
+		Timeout: 15 * time.Second,
+		// Artwork must stay on the configured Plex server. Following an upstream
+		// redirect would turn even an allow-listed image reference into a proxy.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 	if _, err := api.refreshLibrary(); err != nil {
 		log.Printf("initial Plex library cache load failed: %v", err)
 	}
@@ -1214,15 +1220,35 @@ func (a *API) permissions(w http.ResponseWriter, r *http.Request, session *Sessi
 }
 
 func (a *API) handleArtwork(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	id := r.URL.Query().Get("id")
+	if kind == "" || id == "" {
+		respondError(w, http.StatusBadRequest, "artwork kind and id are required")
+		return
+	}
 	if !a.admin(r) {
-		if _, _, ok := a.anyMember(r); !ok {
+		member, session, ok := a.anyMember(r)
+		if !ok {
 			respondError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
+		// A listener whose Library permission was revoked may still see the
+		// room's now-playing cover, but cannot browse arbitrary cached artwork.
+		if !member.Host && !member.Permissions.CanLibrary {
+			current, currentOK := session.current()
+			if kind != "track" || !currentOK || current.ID != id {
+				respondError(w, http.StatusForbidden, "library permission required")
+				return
+			}
+		}
 	}
-	path := r.URL.Query().Get("path")
-	if !strings.HasPrefix(path, "/library/") {
-		respondError(w, http.StatusBadRequest, "invalid artwork path")
+	if a.library == nil {
+		respondError(w, http.StatusServiceUnavailable, "library cache is not ready")
+		return
+	}
+	path, found := a.library.artworkPath(kind, id)
+	if !found {
+		respondError(w, http.StatusNotFound, "artwork not found")
 		return
 	}
 	upstream, err := a.http.Get(a.plex.MakeURL(path))
@@ -1235,9 +1261,18 @@ func (a *API) handleArtwork(w http.ResponseWriter, r *http.Request) {
 		respondError(w, upstream.StatusCode, "artwork unavailable")
 		return
 	}
-	w.Header().Set("Content-Type", upstream.Header.Get("Content-Type"))
+	contentType := upstream.Header.Get("Content-Type")
+	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		respondError(w, http.StatusBadGateway, "Plex returned non-image artwork")
+		return
+	}
+	if upstream.ContentLength > maxArtworkBytes {
+		respondError(w, http.StatusBadGateway, "artwork is too large")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	_, _ = io.Copy(w, upstream.Body)
+	_, _ = io.Copy(w, io.LimitReader(upstream.Body, maxArtworkBytes))
 }
 
 func (a *API) anyMember(r *http.Request) (Member, *Session, bool) {
@@ -1257,7 +1292,7 @@ type publicTrack struct {
 	AlbumID     string   `json:"albumId,omitempty"`
 	TrackIndex  int      `json:"trackIndex,omitempty"`
 	DiscIndex   int      `json:"discIndex,omitempty"`
-	Artwork     string   `json:"artwork,omitempty"`
+	HasArtwork  bool     `json:"hasArtwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
 	SearchTerms []string `json:"searchTerms,omitempty"`
 	DurationMS  int64    `json:"durationMs"`
@@ -1266,7 +1301,7 @@ type publicTrack struct {
 type publicArtist struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
-	Artwork     string   `json:"artwork,omitempty"`
+	HasArtwork  bool     `json:"hasArtwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
 	SearchTerms []string `json:"searchTerms,omitempty"`
 }
@@ -1281,7 +1316,7 @@ type publicAlbum struct {
 	ReleaseType string   `json:"releaseType,omitempty"`
 	SubType     string   `json:"subtype,omitempty"`
 	Formats     []string `json:"formats,omitempty"`
-	Artwork     string   `json:"artwork,omitempty"`
+	HasArtwork  bool     `json:"hasArtwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
 	SearchTerms []string `json:"searchTerms,omitempty"`
 }
@@ -1406,7 +1441,7 @@ func normalizeTracks(items []responses.ResponseTrack) []Track {
 	return tracks
 }
 func publicTrackFor(track Track) publicTrack {
-	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, ArtistID: track.ArtistID, Album: track.Album, AlbumID: track.AlbumID, TrackIndex: track.TrackIndex, DiscIndex: track.DiscIndex, Artwork: track.Artwork, BlurHash: track.BlurHash, SearchTerms: track.SearchTerms, DurationMS: track.DurationMS}
+	return publicTrack{ID: track.ID, Title: track.Title, Artist: track.Artist, ArtistID: track.ArtistID, Album: track.Album, AlbumID: track.AlbumID, TrackIndex: track.TrackIndex, DiscIndex: track.DiscIndex, HasArtwork: track.Artwork != "", BlurHash: track.BlurHash, SearchTerms: track.SearchTerms, DurationMS: track.DurationMS}
 }
 func publicTracks(tracks []Track) []publicTrack {
 	result := make([]publicTrack, 0, len(tracks))
@@ -1419,7 +1454,7 @@ func publicTracks(tracks []Track) []publicTrack {
 func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 	result := make([]publicArtist, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicArtist{ID: item.RatingKey, Title: item.Title, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort)})
+		result = append(result, publicArtist{ID: item.RatingKey, Title: item.Title, HasArtwork: item.Thumb != "", BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort)})
 	}
 	return result
 }
@@ -1427,7 +1462,7 @@ func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 func publicAlbums(items []responses.ResponseAlbumDirectory, categories map[string]string) []publicAlbum {
 	result := make([]publicAlbum, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, ArtistID: item.ParentRatingKey, Year: item.Year, Category: categories[item.RatingKey], ReleaseType: item.ReleaseType, SubType: item.SubType, Formats: albumFormats(item.Formats), Artwork: item.Thumb, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.ParentTitleSort)})
+		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, ArtistID: item.ParentRatingKey, Year: item.Year, Category: categories[item.RatingKey], ReleaseType: item.ReleaseType, SubType: item.SubType, Formats: albumFormats(item.Formats), HasArtwork: item.Thumb != "", BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.ParentTitleSort)})
 	}
 	return result
 }
@@ -1508,15 +1543,16 @@ func respondError(w http.ResponseWriter, status int, message string) {
 	respond(w, status, map[string]string{"error": message})
 }
 func clientIP(r *http.Request) string {
-	if value := r.Header.Get("X-Forwarded-For"); value != "" {
-		return strings.TrimSpace(strings.Split(value, ",")[0])
+	if value := strings.TrimSpace(r.Header.Get("X-Real-IP")); value != "" {
+		return value
 	}
 	return r.RemoteAddr
 }
 
 type rateLimiter struct {
-	mu      sync.Mutex
-	entries map[string]rateEntry
+	mu         sync.Mutex
+	entries    map[string]rateEntry
+	lastPruned time.Time
 }
 type rateEntry struct {
 	count int
@@ -1527,8 +1563,16 @@ func newRateLimiter() *rateLimiter { return &rateLimiter{entries: map[string]rat
 func (l *rateLimiter) allow(key string, max int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	item := l.entries[key]
 	now := time.Now()
+	if now.Sub(l.lastPruned) >= time.Minute {
+		for existingKey, existing := range l.entries {
+			if existing.reset.Before(now) {
+				delete(l.entries, existingKey)
+			}
+		}
+		l.lastPruned = now
+	}
+	item := l.entries[key]
 	if item.reset.Before(now) {
 		item = rateEntry{reset: now.Add(time.Minute)}
 	}

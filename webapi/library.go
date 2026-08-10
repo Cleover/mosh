@@ -38,6 +38,7 @@ type libraryCache struct {
 	tracksByID     map[string]Track
 	tracksByAlbum  map[string][]Track
 	tracksByArtist map[string][]Track
+	artworkByKind  map[string]map[string]string
 	refreshedAt    time.Time
 }
 
@@ -46,6 +47,11 @@ func newLibraryCache() *libraryCache {
 		tracksByID:     make(map[string]Track),
 		tracksByAlbum:  make(map[string][]Track),
 		tracksByArtist: make(map[string][]Track),
+		artworkByKind: map[string]map[string]string{
+			"track":  {},
+			"album":  {},
+			"artist": {},
+		},
 	}
 }
 
@@ -128,13 +134,31 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	tracksByID := make(map[string]Track, len(tracks))
 	tracksByAlbum := make(map[string][]Track)
 	tracksByArtist := make(map[string][]Track)
+	artworkByKind := map[string]map[string]string{
+		"track":  {},
+		"album":  {},
+		"artist": {},
+	}
 	for _, track := range tracks {
 		tracksByID[track.ID] = track
+		if track.Artwork != "" {
+			artworkByKind["track"][track.ID] = track.Artwork
+		}
 		if track.AlbumID != "" {
 			tracksByAlbum[track.AlbumID] = append(tracksByAlbum[track.AlbumID], track)
 		}
 		if track.ArtistID != "" {
 			tracksByArtist[track.ArtistID] = append(tracksByArtist[track.ArtistID], track)
+		}
+	}
+	for _, album := range rawAlbums {
+		if album.Thumb != "" {
+			artworkByKind["album"][album.RatingKey] = album.Thumb
+		}
+	}
+	for _, artist := range rawArtists {
+		if artist.Thumb != "" {
+			artworkByKind["artist"][artist.RatingKey] = artist.Thumb
 		}
 	}
 	for albumID := range tracksByAlbum {
@@ -166,6 +190,7 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	cache.tracksByID = tracksByID
 	cache.tracksByAlbum = tracksByAlbum
 	cache.tracksByArtist = tracksByArtist
+	cache.artworkByKind = artworkByKind
 	cache.refreshedAt = refreshedAt
 	cache.ready = true
 	cache.mu.Unlock()
@@ -284,6 +309,21 @@ func (c *libraryCache) track(id string) (Track, bool) {
 	}
 	track, found := c.tracksByID[id]
 	return track, found
+}
+
+// artworkPath returns a reference collected from Plex during the last full
+// library refresh. Browser input is never used as a Plex path.
+func (c *libraryCache) artworkPath(kind, id string) (string, bool) {
+	if (kind != "track" && kind != "album" && kind != "artist") || id == "" {
+		return "", false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.ready {
+		return "", false
+	}
+	path, found := c.artworkByKind[kind][id]
+	return path, found && path != ""
 }
 
 func (c *libraryCache) tracksForAlbum(id string) ([]Track, bool) {
