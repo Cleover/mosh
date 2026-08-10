@@ -14,7 +14,7 @@ func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 		{ID: "track-1", Title: "Blue Sky", Artist: "The Echoes", ArtistID: "artist-1", Album: "First Light", AlbumID: "album-1", TrackIndex: 2},
 		{ID: "track-2", Title: "Morning Glow", Artist: "The Echoes", ArtistID: "artist-1", Album: "First Light", AlbumID: "album-1", TrackIndex: 1},
 	}
-	cache.albums = []publicAlbum{{ID: "album-1", Title: "First Light", Artist: "The Echoes"}}
+	cache.albums = []publicAlbum{{ID: "album-1", Title: "First Light", Artist: "The Echoes", ReleaseType: "album;compilation"}}
 	cache.artists = []publicArtist{{ID: "artist-1", Title: "The Echoes"}}
 	cache.tracksByID = map[string]Track{"track-1": cache.tracks[0], "track-2": cache.tracks[1]}
 	cache.tracksByAlbum = map[string][]Track{"album-1": {cache.tracks[1], cache.tracks[0]}}
@@ -69,7 +69,7 @@ func TestSessionLibraryAllReturnsOneCachedSnapshot(t *testing.T) {
 	api := &API{library: newLibraryCache()}
 	api.library.ready = true
 	api.library.tracks = []Track{{ID: "track-1", Title: "Blue Sky", DurationMS: 1}}
-	api.library.albums = []publicAlbum{{ID: "album-1", Title: "First Light"}}
+	api.library.albums = []publicAlbum{{ID: "album-1", Title: "First Light", ReleaseType: "single"}}
 	api.library.artists = []publicArtist{{ID: "artist-1", Title: "The Echoes"}}
 
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions/room/library?kind=all", nil)
@@ -89,6 +89,9 @@ func TestSessionLibraryAllReturnsOneCachedSnapshot(t *testing.T) {
 	}
 	if len(response.Tracks) != 1 || len(response.Albums) != 1 || len(response.Artists) != 1 {
 		t.Fatalf("all library response = %#v; want one item of each kind", response)
+	}
+	if response.Albums[0].ReleaseType != "single" {
+		t.Fatalf("all library releaseType = %q; want %q", response.Albums[0].ReleaseType, "single")
 	}
 }
 

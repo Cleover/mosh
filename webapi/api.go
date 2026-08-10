@@ -1113,6 +1113,7 @@ type publicAlbum struct {
 	Artist      string   `json:"artist"`
 	ArtistID    string   `json:"artistId,omitempty"`
 	Year        int      `json:"year,omitempty"`
+	ReleaseType string   `json:"releaseType,omitempty"`
 	SubType     string   `json:"subtype,omitempty"`
 	Artwork     string   `json:"artwork,omitempty"`
 	BlurHash    string   `json:"blurHash,omitempty"`
@@ -1257,7 +1258,7 @@ func publicArtists(items []responses.ResponseArtistDirectory) []publicArtist {
 func publicAlbums(items []responses.ResponseAlbumDirectory) []publicAlbum {
 	result := make([]publicAlbum, 0, len(items))
 	for _, item := range items {
-		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, ArtistID: item.ParentRatingKey, Year: item.Year, SubType: item.SubType, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.ParentTitleSort)})
+		result = append(result, publicAlbum{ID: item.RatingKey, Title: item.Title, Artist: item.ParentTitle, ArtistID: item.ParentRatingKey, Year: item.Year, ReleaseType: item.ReleaseType, SubType: item.SubType, Artwork: item.Thumb, BlurHash: item.ThumbBlurHash, SearchTerms: uniqueSearchTerms(item.TitleSort, item.ParentTitleSort)})
 	}
 	return result
 }
