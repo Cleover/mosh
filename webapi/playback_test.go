@@ -35,6 +35,29 @@ func TestQueueEndClearsPlaybackAndQueue(t *testing.T) {
 	}
 }
 
+func TestNextOnFinalTrackClearsPlaybackAndQueue(t *testing.T) {
+	store := &Store{path: filepath.Join(t.TempDir(), "sessions.json"), sessions: map[string]*Session{
+		"room": {
+			ID: "room", Queue: []Track{{ID: "last"}}, CurrentIndex: 0,
+			IsPlaying: false, StreamVersion: 4, Members: map[string]Member{},
+		},
+	}}
+	api := &API{store: store, streams: NewStreamHub("unused", "320k")}
+	member := Member{ID: "host", Host: true}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+
+	api.control(recorder, request, store.sessions["room"], member, "next")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("next on final track returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	session, ok := store.snapshot("room")
+	if !ok || session.IsPlaying || session.CurrentIndex != -1 || len(session.Queue) != 0 || session.PositionMS != 0 {
+		t.Fatalf("expected next on final track to leave an empty idle queue, got %#v", session)
+	}
+}
+
 func TestQueueEditsOnlyMoveUpcomingTracks(t *testing.T) {
 	store := &Store{path: filepath.Join(t.TempDir(), "sessions.json"), sessions: map[string]*Session{
 		"room": {

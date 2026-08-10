@@ -786,6 +786,18 @@ func (a *API) control(w http.ResponseWriter, r *http.Request, session *Session, 
 		}
 		next := current.CurrentIndex + delta
 		if next < 0 || next >= len(current.Queue) {
+			if action == "next" {
+				// Match the natural end-of-track path: skipping the final entry
+				// leaves the room idle with no stale now-playing item or queue.
+				current.Queue = nil
+				current.CurrentIndex = -1
+				current.IsPlaying = false
+				current.PositionMS = 0
+				current.PositionAt = now
+				current.StreamVersion++
+				stop = true
+				break
+			}
 			a.store.mu.Unlock()
 			respondError(w, http.StatusBadRequest, "no track in that direction")
 			return
