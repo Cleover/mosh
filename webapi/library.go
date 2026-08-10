@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -78,13 +79,40 @@ func (a *API) refreshLibrary() (libraryStatus, error) {
 	if err != nil {
 		return libraryStatus{}, err
 	}
+	// Plex only exposes these classifications through its music-format
+	// filters, not on the ordinary all-albums response. Resolve them once here
+	// and cache the resulting IDs so opening an artist never triggers Plex
+	// requests in the browser.
+	singleAlbums, err := a.plex.GetAllAlbumsByPlexFilter("format=EP%2CSingle")
+	if err != nil {
+		return libraryStatus{}, fmt.Errorf("load Plex singles and EPs: %w", err)
+	}
+	soundtrackAlbums, err := a.plex.GetAllAlbumsByPlexFilter("format!=EP%2CSingle&subformat=Soundtrack")
+	if err != nil {
+		return libraryStatus{}, fmt.Errorf("load Plex soundtracks: %w", err)
+	}
+	compilationAlbums, err := a.plex.GetAllAlbumsByPlexFilter("format!=EP%2CSingle&subformat=Compilation&subformat!=Live%2CSoundtrack")
+	if err != nil {
+		return libraryStatus{}, fmt.Errorf("load Plex compilations: %w", err)
+	}
 	rawTracks, err := a.plex.GetAllTracks()
 	if err != nil {
 		return libraryStatus{}, err
 	}
 
 	artists := publicArtists(rawArtists)
-	albums := publicAlbums(rawAlbums)
+	albumCategories := make(map[string]string, len(singleAlbums)+len(soundtrackAlbums)+len(compilationAlbums))
+	for _, album := range singleAlbums {
+		albumCategories[album.RatingKey] = "singles"
+	}
+	for _, album := range soundtrackAlbums {
+		albumCategories[album.RatingKey] = "soundtracks"
+	}
+	for _, album := range compilationAlbums {
+		albumCategories[album.RatingKey] = "compilations"
+	}
+
+	albums := publicAlbums(rawAlbums, albumCategories)
 	tracks := normalizeTracks(rawTracks)
 	sort.Slice(artists, func(i, j int) bool {
 		return compareLibraryText(artists[i].Title, artists[j].Title, artists[i].ID, artists[j].ID)

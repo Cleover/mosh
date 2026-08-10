@@ -172,9 +172,20 @@ func (s *Server) GetAllArtists() ([]responses.ResponseArtistDirectory, error) {
 }
 
 func (s *Server) GetAllAlbums() ([]responses.ResponseAlbumDirectory, error) {
+	return s.getAllAlbums("")
+}
+
+// GetAllAlbumsByPlexFilter returns the album subset identified by Plex's
+// music-format query syntax. The filter is deliberately internal-only: the
+// web UI never supplies query fragments to Plex.
+func (s *Server) GetAllAlbumsByPlexFilter(filter string) ([]responses.ResponseAlbumDirectory, error) {
+	return s.getAllAlbums(filter)
+}
+
+func (s *Server) getAllAlbums(filter string) ([]responses.ResponseAlbumDirectory, error) {
 	items := make([]responses.ResponseAlbumDirectory, 0)
 	for start := 0; ; {
-		url := s.libraryAllURL(9, start)
+		url := s.libraryAllURLWithFilter(9, start, filter)
 		body, status := s.doGet(url)
 		if status != http.StatusOK {
 			return nil, fmt.Errorf("Plex album library request returned %d", status)
@@ -212,10 +223,18 @@ func (s *Server) GetAllTracks() ([]responses.ResponseTrack, error) {
 }
 
 func (s *Server) libraryAllURL(itemType, start int) string {
+	return s.libraryAllURLWithFilter(itemType, start, "")
+}
+
+func (s *Server) libraryAllURLWithFilter(itemType, start int, filter string) string {
 	// Blur hashes arrive alongside the ordinary library metadata. Asking Plex
 	// for the optional field here keeps the cache refresh to the same paged
 	// requests instead of making the browser fetch artwork placeholders later.
-	return s.PlexURLs.Server() + "/library/sections/" + s.Config.Library + "/all?type=" + strconv.Itoa(itemType) + "&X-Plex-Container-Start=" + strconv.Itoa(start) + "&X-Plex-Container-Size=" + strconv.Itoa(libraryPageSize) + "&resolveTags=1&includeFields=thumbBlurHash,artBlurHash,titleSort,parentTitleSort,grandparentTitleSort,releasetype&X-Plex-Token=" + s.Config.Token
+	url := s.PlexURLs.Server() + "/library/sections/" + s.Config.Library + "/all?type=" + strconv.Itoa(itemType) + "&X-Plex-Container-Start=" + strconv.Itoa(start) + "&X-Plex-Container-Size=" + strconv.Itoa(libraryPageSize) + "&resolveTags=1&includeFields=thumbBlurHash,artBlurHash,titleSort,parentTitleSort,grandparentTitleSort,releasetype"
+	if filter != "" {
+		url += "&" + filter
+	}
+	return url + "&X-Plex-Token=" + s.Config.Token
 }
 
 func (s *Server) GetAlbumsForArtist(artistID string) []responses.ResponseAlbumDirectory {

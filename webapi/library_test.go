@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/adamrdrew/mosh/responses"
 )
 
 func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
@@ -62,6 +64,13 @@ func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 	allArtists[0].Title = "changed again"
 	if cache.tracks[0].Title == "changed again" || cache.albums[0].Title == "changed again" || cache.artists[0].Title == "changed again" {
 		t.Fatal("all returned mutable cache slices")
+	}
+}
+
+func TestPublicAlbumsUsesCachedPlexCategory(t *testing.T) {
+	albums := publicAlbums([]responses.ResponseAlbumDirectory{{RatingKey: "album-1", Title: "First Light"}}, map[string]string{"album-1": "soundtracks"})
+	if len(albums) != 1 || albums[0].Category != "soundtracks" {
+		t.Fatalf("publicAlbums() = %#v; expected a cached soundtrack category", albums)
 	}
 }
 
