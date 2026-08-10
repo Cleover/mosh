@@ -158,6 +158,15 @@ func (a *API) sessionLibrary(w http.ResponseWriter, r *http.Request, member Memb
 	}
 
 	switch r.URL.Query().Get("kind") {
+	case "all":
+		tracks, albums, artists, status, ready := a.library.all()
+		if !ready {
+			respondError(w, http.StatusServiceUnavailable, "library cache is not ready")
+			return
+		}
+		respond(w, http.StatusOK, map[string]any{
+			"tracks": publicTracks(tracks), "albums": albums, "artists": artists, "refreshedAt": status.RefreshedAt,
+		})
 	case "tracks":
 		tracks, status, ready := a.library.allTracks()
 		if !ready {
@@ -180,7 +189,7 @@ func (a *API) sessionLibrary(w http.ResponseWriter, r *http.Request, member Memb
 		}
 		respond(w, http.StatusOK, map[string]any{"artists": artists, "refreshedAt": status.RefreshedAt})
 	default:
-		respondError(w, http.StatusBadRequest, "library kind must be tracks, albums, or artists")
+		respondError(w, http.StatusBadRequest, "library kind must be all, tracks, albums, or artists")
 	}
 }
 
@@ -270,6 +279,14 @@ func (c *libraryCache) allTracks() ([]Track, libraryStatus, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return append([]Track(nil), c.tracks...), c.statusLocked(), c.ready
+}
+
+// all returns one internally consistent snapshot for the unified search UI.
+// It is still served from the local cache, so typing never causes Plex calls.
+func (c *libraryCache) all() ([]Track, []publicAlbum, []publicArtist, libraryStatus, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]Track(nil), c.tracks...), append([]publicAlbum(nil), c.albums...), append([]publicArtist(nil), c.artists...), c.statusLocked(), c.ready
 }
 
 func (c *libraryCache) allAlbums() ([]publicAlbum, libraryStatus, bool) {

@@ -1,6 +1,7 @@
 package webapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -47,6 +48,47 @@ func TestLibraryCacheServesSearchesAndCopies(t *testing.T) {
 	artistTracks[0].Title = "changed"
 	if cache.tracksByArtist["artist-1"][0].Title == "changed" {
 		t.Fatal("tracksForArtist returned a mutable cache slice")
+	}
+
+	allTracks, allAlbums, allArtists, status, ready := cache.all()
+	if !ready || len(allTracks) != 2 || len(allAlbums) != 1 || len(allArtists) != 1 {
+		t.Fatalf("all() returned tracks=%d albums=%d artists=%d ready=%t; want 2, 1, 1, true", len(allTracks), len(allAlbums), len(allArtists), ready)
+	}
+	if status.Tracks != 2 || status.Albums != 1 || status.Artists != 1 {
+		t.Fatalf("all() status = %#v; want 2 tracks, 1 album, 1 artist", status)
+	}
+	allTracks[0].Title = "changed again"
+	allAlbums[0].Title = "changed again"
+	allArtists[0].Title = "changed again"
+	if cache.tracks[0].Title == "changed again" || cache.albums[0].Title == "changed again" || cache.artists[0].Title == "changed again" {
+		t.Fatal("all returned mutable cache slices")
+	}
+}
+
+func TestSessionLibraryAllReturnsOneCachedSnapshot(t *testing.T) {
+	api := &API{library: newLibraryCache()}
+	api.library.ready = true
+	api.library.tracks = []Track{{ID: "track-1", Title: "Blue Sky", DurationMS: 1}}
+	api.library.albums = []publicAlbum{{ID: "album-1", Title: "First Light"}}
+	api.library.artists = []publicArtist{{ID: "artist-1", Title: "The Echoes"}}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions/room/library?kind=all", nil)
+	recorder := httptest.NewRecorder()
+	api.sessionLibrary(recorder, request, Member{ID: "guest", Permissions: Permissions{CanLibrary: true}})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("all library response returned %d; want %d", recorder.Code, http.StatusOK)
+	}
+
+	var response struct {
+		Tracks  []publicTrack  `json:"tracks"`
+		Albums  []publicAlbum  `json:"albums"`
+		Artists []publicArtist `json:"artists"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode all library response: %v", err)
+	}
+	if len(response.Tracks) != 1 || len(response.Albums) != 1 || len(response.Artists) != 1 {
+		t.Fatalf("all library response = %#v; want one item of each kind", response)
 	}
 }
 
