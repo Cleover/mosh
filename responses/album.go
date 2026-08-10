@@ -26,8 +26,16 @@ type ResponseAlbumDirectory struct {
 	SubType     string `xml:"subtype,attr"`
 	Year        int    `xml:"year,attr"`
 	//Album artwork, served through the web API's authenticated artwork proxy.
-	Thumb         string `xml:"thumb,attr"`
-	ThumbBlurHash string `xml:"thumbBlurHash,attr"`
+	Thumb         string                `xml:"thumb,attr"`
+	ThumbBlurHash string                `xml:"thumbBlurHash,attr"`
+	Formats       []ResponseAlbumFormat `xml:"Format"`
+}
+
+// ResponseAlbumFormat is included when Plex receives resolveTags=1. Plexamp
+// uses these music-format tags (Album, EP, Single, Soundtrack, Compilation)
+// to split an artist's discography into its sections.
+type ResponseAlbumFormat struct {
+	Tag string `xml:"tag,attr"`
 }
 
 type ResponseAlbumMediaContainer struct {
