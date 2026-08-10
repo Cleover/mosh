@@ -3,6 +3,7 @@ package webapi
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strings"
@@ -315,6 +316,41 @@ func (c *libraryCache) all() ([]Track, []publicAlbum, []publicArtist, librarySta
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return append([]Track(nil), c.tracks...), append([]publicAlbum(nil), c.albums...), append([]publicArtist(nil), c.artists...), c.statusLocked(), c.ready
+}
+
+// randomTracks draws from the in-memory library snapshot. Shuffle never asks
+// Plex at playback time, which keeps it as cheap as normal queue navigation.
+func (c *libraryCache) randomTracks(excluded map[string]struct{}, count int) []Track {
+	if count <= 0 {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.ready {
+		return nil
+	}
+	candidates := make([]Track, 0, len(c.tracks))
+	for _, track := range c.tracks {
+		if track.PartPath == "" {
+			continue
+		}
+		if _, used := excluded[track.ID]; used {
+			continue
+		}
+		candidates = append(candidates, track)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	if count > len(candidates) {
+		count = len(candidates)
+	}
+	permutation := rand.Perm(len(candidates))
+	result := make([]Track, 0, count)
+	for _, index := range permutation[:count] {
+		result = append(result, candidates[index])
+	}
+	return result
 }
 
 func (c *libraryCache) allAlbums() ([]publicAlbum, libraryStatus, bool) {

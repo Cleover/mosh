@@ -33,6 +33,7 @@ type API struct {
 }
 
 const memberIdleTimeout = 45 * time.Second
+const shuffleQueueSize = 10
 
 func New(config AppConfig) (*API, error) {
 	plexConfig := moshconfig.GetConfig()
@@ -431,6 +432,10 @@ func (a *API) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		a.removeFromQueue(w, r, session, member)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "queue" && parts[2] == "promote" && r.Method == http.MethodPost {
+		a.promoteShuffledTrack(w, r, session, member)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "leave" && r.Method == http.MethodPost {
 		a.leave(w, r, session, member)
 		return
@@ -707,6 +712,48 @@ func (a *API) removeFromQueue(w http.ResponseWriter, r *http.Request, session *S
 	respond(w, http.StatusOK, map[string]any{"session": a.view(view)})
 }
 
+// promoteShuffledTrack moves one suggestion into the editable main queue.
+// The inverse is deliberately unavailable: manually selected tracks always
+// retain priority over the shuffled fallback queue.
+func (a *API) promoteShuffledTrack(w http.ResponseWriter, r *http.Request, session *Session, member Member) {
+	if !member.Host && !member.Permissions.CanQueue {
+		respondError(w, http.StatusForbidden, "queue permission required")
+		return
+	}
+	var input struct {
+		ShuffleIndex int `json:"shuffleIndex"`
+		ToIndex      int `json:"toIndex"`
+	}
+	if !decode(r, &input) {
+		respondError(w, http.StatusBadRequest, "shuffleIndex and toIndex are required")
+		return
+	}
+	a.store.mu.Lock()
+	current := a.store.sessions[session.ID]
+	if current == nil {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if input.ShuffleIndex < 0 || input.ShuffleIndex >= len(current.ShuffleQueue) || input.ToIndex <= current.CurrentIndex || input.ToIndex > len(current.Queue) {
+		a.store.mu.Unlock()
+		respondError(w, http.StatusBadRequest, "only shuffled tracks can move into the upcoming queue")
+		return
+	}
+	track := current.ShuffleQueue[input.ShuffleIndex]
+	current.ShuffleQueue = append(current.ShuffleQueue[:input.ShuffleIndex], current.ShuffleQueue[input.ShuffleIndex+1:]...)
+	current.Queue = insertQueueTrack(current.Queue, input.ToIndex, track)
+	a.refillShuffleQueue(current)
+	err := a.store.saveLocked()
+	a.store.mu.Unlock()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save queue")
+		return
+	}
+	view, _ := a.store.snapshot(session.ID)
+	respond(w, http.StatusOK, map[string]any{"session": a.view(view)})
+}
+
 func (a *API) leave(w http.ResponseWriter, r *http.Request, session *Session, member Member) {
 	a.store.mu.Lock()
 	current := a.store.sessions[session.ID]
@@ -787,9 +834,25 @@ func (a *API) control(w http.ResponseWriter, r *http.Request, session *Session, 
 		next := current.CurrentIndex + delta
 		if next < 0 || next >= len(current.Queue) {
 			if action == "next" {
+				if shuffled, ok := a.promoteNextShuffledTrack(current); ok {
+					current.RepeatCurrent = false
+					current.CurrentIndex = len(current.Queue) - 1
+					current.PositionMS = 0
+					current.PositionAt = now
+					current.StreamVersion++
+					track = shuffled
+					shouldStart = current.IsPlaying
+					stop = !current.IsPlaying
+					break
+				}
+			}
+			if action == "next" {
 				// Match the natural end-of-track path: skipping the final entry
 				// leaves the room idle with no stale now-playing item or queue.
 				current.Queue = nil
+				current.ShuffleQueue = nil
+				current.ShuffleEnabled = false
+				current.RepeatCurrent = false
 				current.CurrentIndex = -1
 				current.IsPlaying = false
 				current.PositionMS = 0
@@ -802,6 +865,7 @@ func (a *API) control(w http.ResponseWriter, r *http.Request, session *Session, 
 			respondError(w, http.StatusBadRequest, "no track in that direction")
 			return
 		}
+		current.RepeatCurrent = false
 		current.CurrentIndex = next
 		current.PositionMS = 0
 		current.PositionAt = now
@@ -809,6 +873,25 @@ func (a *API) control(w http.ResponseWriter, r *http.Request, session *Session, 
 		track, _ = current.current()
 		shouldStart = current.IsPlaying
 		stop = !current.IsPlaying
+	case "repeat":
+		if !hasTrack {
+			a.store.mu.Unlock()
+			respondError(w, http.StatusBadRequest, "queue is empty")
+			return
+		}
+		current.RepeatCurrent = !current.RepeatCurrent
+	case "shuffle":
+		if !hasTrack {
+			a.store.mu.Unlock()
+			respondError(w, http.StatusBadRequest, "queue is empty")
+			return
+		}
+		current.ShuffleEnabled = !current.ShuffleEnabled
+		if current.ShuffleEnabled {
+			a.refillShuffleQueue(current)
+		} else {
+			current.ShuffleQueue = nil
+		}
 	case "seek":
 		if !hasTrack {
 			a.store.mu.Unlock()
@@ -967,10 +1050,17 @@ func (a *API) peekStreamNext(sessionID, trackID string, version int64) (streamTr
 		return streamTrack{}, false
 	}
 	current, ok := session.current()
-	if !ok || current.ID != trackID || session.CurrentIndex+1 >= len(session.Queue) {
+	if !ok || current.ID != trackID || session.RepeatCurrent {
 		return streamTrack{}, false
 	}
-	next := session.Queue[session.CurrentIndex+1]
+	var next Track
+	if session.CurrentIndex+1 < len(session.Queue) {
+		next = session.Queue[session.CurrentIndex+1]
+	} else if session.ShuffleEnabled && len(session.ShuffleQueue) > 0 {
+		next = session.ShuffleQueue[0]
+	} else {
+		return streamTrack{}, false
+	}
 	if next.PartPath == "" {
 		return streamTrack{}, false
 	}
@@ -993,10 +1083,36 @@ func (a *API) advanceStreamNext(sessionID, trackID string, version int64) (strea
 		return streamTrack{}, false
 	}
 	now := time.Now()
+	if session.RepeatCurrent {
+		session.PositionMS = 0
+		session.PositionAt = now
+		err := a.store.saveLocked()
+		a.store.mu.Unlock()
+		if err != nil {
+			log.Printf("could not persist repeated shared track for %s: %v", sessionID, err)
+			return streamTrack{}, false
+		}
+		return streamTrack{Track: current, SourceURL: a.plex.MakeURL(current.PartPath)}, true
+	}
 	nextIndex := session.CurrentIndex + 1
 	if nextIndex >= len(session.Queue) {
+		if next, ok := a.promoteNextShuffledTrack(session); ok {
+			session.CurrentIndex = len(session.Queue) - 1
+			session.PositionMS = 0
+			session.PositionAt = now
+			err := a.store.saveLocked()
+			a.store.mu.Unlock()
+			if err != nil {
+				log.Printf("could not persist shuffled shared track for %s: %v", sessionID, err)
+				return streamTrack{}, false
+			}
+			return streamTrack{Track: next, SourceURL: a.plex.MakeURL(next.PartPath)}, true
+		}
 		// A completed room has no now-playing track and no remaining queue.
 		session.Queue = nil
+		session.ShuffleQueue = nil
+		session.ShuffleEnabled = false
+		session.RepeatCurrent = false
 		session.CurrentIndex = -1
 		session.IsPlaying = false
 		session.PositionMS = 0
@@ -1024,6 +1140,42 @@ func (a *API) advanceStreamNext(sessionID, trackID string, version int64) (strea
 		return streamTrack{}, false
 	}
 	return streamTrack{Track: next, SourceURL: a.plex.MakeURL(next.PartPath)}, true
+}
+
+func insertQueueTrack(queue []Track, index int, track Track) []Track {
+	queue = append(queue, Track{})
+	copy(queue[index+1:], queue[index:])
+	queue[index] = track
+	return queue
+}
+
+func (a *API) promoteNextShuffledTrack(session *Session) (Track, bool) {
+	if !session.ShuffleEnabled {
+		return Track{}, false
+	}
+	a.refillShuffleQueue(session)
+	if len(session.ShuffleQueue) == 0 {
+		return Track{}, false
+	}
+	next := session.ShuffleQueue[0]
+	session.ShuffleQueue = session.ShuffleQueue[1:]
+	session.Queue = append(session.Queue, next)
+	a.refillShuffleQueue(session)
+	return next, true
+}
+
+func (a *API) refillShuffleQueue(session *Session) {
+	if !session.ShuffleEnabled || len(session.ShuffleQueue) >= shuffleQueueSize || a.library == nil {
+		return
+	}
+	excluded := make(map[string]struct{}, len(session.Queue)+len(session.ShuffleQueue))
+	for _, track := range session.Queue {
+		excluded[track.ID] = struct{}{}
+	}
+	for _, track := range session.ShuffleQueue {
+		excluded[track.ID] = struct{}{}
+	}
+	session.ShuffleQueue = append(session.ShuffleQueue, a.library.randomTracks(excluded, shuffleQueueSize-len(session.ShuffleQueue))...)
 }
 
 func (a *API) permissions(w http.ResponseWriter, r *http.Request, session *Session, member Member, targetID string) {
@@ -1134,17 +1286,20 @@ type publicAlbum struct {
 	SearchTerms []string `json:"searchTerms,omitempty"`
 }
 type sessionView struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	IsPublic      bool          `json:"isPublic"`
-	Queue         []publicTrack `json:"queue"`
-	CurrentIndex  int           `json:"currentIndex"`
-	Current       *publicTrack  `json:"currentTrack,omitempty"`
-	IsPlaying     bool          `json:"isPlaying"`
-	PositionMS    int64         `json:"positionMs"`
-	StreamVersion int64         `json:"streamVersion"`
-	Members       []Member      `json:"members"`
-	CreatedAt     time.Time     `json:"createdAt"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	IsPublic       bool          `json:"isPublic"`
+	Queue          []publicTrack `json:"queue"`
+	ShuffleQueue   []publicTrack `json:"shuffleQueue"`
+	ShuffleEnabled bool          `json:"shuffleEnabled"`
+	RepeatCurrent  bool          `json:"repeatCurrent"`
+	CurrentIndex   int           `json:"currentIndex"`
+	Current        *publicTrack  `json:"currentTrack,omitempty"`
+	IsPlaying      bool          `json:"isPlaying"`
+	PositionMS     int64         `json:"positionMs"`
+	StreamVersion  int64         `json:"streamVersion"`
+	Members        []Member      `json:"members"`
+	CreatedAt      time.Time     `json:"createdAt"`
 }
 
 type publicRoomTrack struct {
@@ -1173,7 +1328,7 @@ type adminSessionView struct {
 
 func (a *API) view(session *Session) sessionView {
 	now := time.Now()
-	view := sessionView{ID: session.ID, Name: session.Name, IsPublic: session.IsPublic, Queue: publicTracks(session.Queue), CurrentIndex: session.CurrentIndex, IsPlaying: session.IsPlaying, PositionMS: session.position(now), StreamVersion: session.StreamVersion, Members: make([]Member, 0), CreatedAt: session.CreatedAt}
+	view := sessionView{ID: session.ID, Name: session.Name, IsPublic: session.IsPublic, Queue: publicTracks(session.Queue), ShuffleQueue: publicTracks(session.ShuffleQueue), ShuffleEnabled: session.ShuffleEnabled, RepeatCurrent: session.RepeatCurrent, CurrentIndex: session.CurrentIndex, IsPlaying: session.IsPlaying, PositionMS: session.position(now), StreamVersion: session.StreamVersion, Members: make([]Member, 0), CreatedAt: session.CreatedAt}
 	if current, ok := session.current(); ok {
 		public := publicTrackFor(current)
 		view.Current = &public

@@ -51,6 +51,9 @@ type Session struct {
 	PasswordHash       string            `json:"passwordHash"`
 	ShareSecret        string            `json:"shareSecret"`
 	Queue              []Track           `json:"queue"`
+	ShuffleQueue       []Track           `json:"shuffleQueue,omitempty"`
+	ShuffleEnabled     bool              `json:"shuffleEnabled,omitempty"`
+	RepeatCurrent      bool              `json:"repeatCurrent,omitempty"`
 	CurrentIndex       int               `json:"currentIndex"`
 	IsPlaying          bool              `json:"isPlaying"`
 	PositionMS         int64             `json:"positionMs"`
@@ -85,6 +88,7 @@ func (s *Store) snapshot(sessionID string) (*Session, bool) {
 func cloneSession(session *Session) *Session {
 	copy := *session
 	copy.Queue = append([]Track(nil), session.Queue...)
+	copy.ShuffleQueue = append([]Track(nil), session.ShuffleQueue...)
 	copy.Members = make(map[string]Member, len(session.Members))
 	for id, member := range session.Members {
 		copy.Members[id] = member
